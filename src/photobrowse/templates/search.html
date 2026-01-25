@@ -78,31 +78,129 @@
         {% endif %}
       </div>
 
-      <div class="grid" data-grid>
-        {% for r in rows %}
-          {% set eager = loop.index0 < 36 %}
-          <div
-            class="tile"
-            data-tile
-            data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
-            data-caption="{{ r['rel_path'] }}"
-          >
-            <img
-              src="/thumb/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
-              loading="{{ 'eager' if eager else 'lazy' }}"
-              fetchpriority="{{ 'high' if eager else 'low' }}"
-              decoding="async"
-              alt="{{ r['rel_path'] }}"
-            />
-            <div class="tile-meta">
-              <div title="{{ r['path'] }}">{{ r["rel_path"] }}</div>
-              <div class="muted">{{ r["date_taken"] or "" }}</div>
+      <div data-grid>
+        {% if q.strip() and offset == 0 and most_relevant_count is not none and most_relevant_count > 0 %}
+          {% set top_n = most_relevant_count %}
+          <div class="results-section" data-most-section>
+            <div class="results-head">
+              <div>
+                <div class="results-title">Most relevant</div>
+                <div class="results-sub">Top matches for “{{ q }}”</div>
+              </div>
+              <div class="results-pill" data-most-pill>
+                Showing {{ [rows|length, top_n]|min }} of {{ rows|length }} on this page
+              </div>
             </div>
-            {% if scores.get(r["id"]) %}
-              <div class="score">{{ "%.3f"|format(scores.get(r["id"])) }}</div>
-            {% endif %}
+            <div class="grid" data-most-grid>
+              {% for r in rows[:top_n] %}
+                {% set eager = loop.index0 < 36 %}
+                <div
+                  class="tile"
+                  data-tile
+                  data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+                  data-caption="{{ r['rel_path'] }}"
+                >
+                  <img
+                    src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+                    data-src="/thumb/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+                    loading="{{ 'eager' if eager else 'lazy' }}"
+                    fetchpriority="{{ 'high' if eager else 'low' }}"
+                    decoding="async"
+                    alt="{{ r['rel_path'] }}"
+                  />
+                  <div class="tile-meta">
+                    <div title="{{ r['path'] }}">{{ r["rel_path"] }}</div>
+                    <div class="muted">{{ r["date_taken"] or "" }}</div>
+                  </div>
+                  {% if scores.get(r["id"]) %}
+                    <div class="score">{{ "%.3f"|format(scores.get(r["id"])) }}</div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
           </div>
-        {% endfor %}
+
+          {% if rows|length > top_n %}
+            <div class="results-section" data-more-section>
+              <div class="results-head">
+                <div>
+                  <div class="results-title">More results</div>
+                  <div class="results-sub">Potentially less relevant matches</div>
+                </div>
+                <div class="results-pill" data-more-pill>
+                  {{ rows|length - top_n }} more on this page
+                </div>
+              </div>
+              <div class="grid" data-more-grid>
+                {% for r in rows[top_n:] %}
+                  {% set eager = (loop.index0 + top_n) < 36 %}
+                  <div
+                    class="tile"
+                    data-tile
+                    data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+                    data-caption="{{ r['rel_path'] }}"
+                  >
+                    <img
+                      src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+                      data-src="/thumb/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+                      loading="{{ 'eager' if eager else 'lazy' }}"
+                      fetchpriority="{{ 'high' if eager else 'low' }}"
+                      decoding="async"
+                      alt="{{ r['rel_path'] }}"
+                    />
+                    <div class="tile-meta">
+                      <div title="{{ r['path'] }}">{{ r["rel_path"] }}</div>
+                      <div class="muted">{{ r["date_taken"] or "" }}</div>
+                    </div>
+                    {% if scores.get(r["id"]) %}
+                      <div class="score">{{ "%.3f"|format(scores.get(r["id"])) }}</div>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% else %}
+            {# Keep a "More results" container for client-side two-row capping. #}
+            <div class="results-section" data-more-section hidden>
+              <div class="results-head">
+                <div>
+                  <div class="results-title">More results</div>
+                  <div class="results-sub">Potentially less relevant matches</div>
+                </div>
+                <div class="results-pill" data-more-pill></div>
+              </div>
+              <div class="grid" data-more-grid></div>
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="grid">
+            {% for r in rows %}
+              {% set eager = loop.index0 < 36 %}
+              <div
+                class="tile"
+                data-tile
+                data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+                data-caption="{{ r['rel_path'] }}"
+              >
+                <img
+                  src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+                  data-src="/thumb/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+                  loading="{{ 'eager' if eager else 'lazy' }}"
+                  fetchpriority="{{ 'high' if eager else 'low' }}"
+                  decoding="async"
+                  alt="{{ r['rel_path'] }}"
+                />
+                <div class="tile-meta">
+                  <div title="{{ r['path'] }}">{{ r["rel_path"] }}</div>
+                  <div class="muted">{{ r["date_taken"] or "" }}</div>
+                </div>
+                {% if scores.get(r["id"]) %}
+                  <div class="score">{{ "%.3f"|format(scores.get(r["id"])) }}</div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
       </div>
 
       {% if has_more %}

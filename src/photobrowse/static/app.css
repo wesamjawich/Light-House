@@ -541,6 +541,44 @@ code.path{
   font-size: 13px;
 }
 
+.results-section{
+  margin-top: 16px;
+}
+.results-section + .results-section{
+  margin-top: 28px;
+}
+.results-head{
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.results-title{
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+.results-sub{
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.results-pill{
+  color: color-mix(in oklab, var(--text) 78%, transparent);
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--panel) 70%, transparent);
+  white-space: nowrap;
+}
+
+.results-section .grid{
+  margin-top: 0;
+}
+
 .grid{
   margin-top: 16px;
   display: grid;

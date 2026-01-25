@@ -33,6 +33,11 @@
     try {
       localStorage.setItem("pb_thumbSize", String(v));
     } catch (_) {}
+    try {
+      window.dispatchEvent(new CustomEvent("pb:thumbsize", { detail: { px: v } }));
+    } catch (_) {
+      // ignore
+    }
   }
 
   function initZoomControls() {
@@ -198,7 +203,13 @@
       const isCurrent = () => token === openToken && currentTile === tile;
 
       // Start with the thumbnail (always visible), then swap to full-res once loaded.
-      const thumbSrc = thumb.currentSrc || thumb.src;
+      let thumbSrc = thumb.currentSrc || thumb.src;
+      const pendingThumb = thumb.getAttribute("data-src");
+      if (pendingThumb && (!thumbSrc || thumbSrc.startsWith("data:"))) {
+        thumb.setAttribute("src", pendingThumb);
+        thumb.removeAttribute("data-src");
+        thumbSrc = pendingThumb;
+      }
       photoImg.src = thumbSrc;
       photoImg.dataset.wantFull = full;
       photoImg.style.objectFit = "cover";
@@ -427,13 +438,245 @@
 
   window.addEventListener("DOMContentLoaded", () => {
     initZoomControls();
+    initRelevantSections();
+    const thumbCtl = initThumbLoading();
+    const statusCtl = initStatus();
+    const searchForm = qs("form.searchbar");
+    searchForm?.addEventListener("submit", () => {
+      // Free up the browser's per-origin connection pool so the next navigation isn't
+      // blocked behind thumbnail/SSE requests.
+      thumbCtl?.cancel?.();
+      statusCtl?.shutdown?.();
+    });
+    window.addEventListener(
+      "pagehide",
+      () => {
+        thumbCtl?.cancel?.();
+        statusCtl?.shutdown?.();
+      },
+      { once: true },
+    );
     initViewer();
-    initStatus();
   });
+
+  function initRelevantSections() {
+    const mostSection = qs("[data-most-section]");
+    const moreSection = qs("[data-more-section]");
+    if (!mostSection || !moreSection) return;
+    const mostGrid = qs("[data-most-grid]", mostSection);
+    const moreGrid = qs("[data-more-grid]", moreSection);
+    if (!mostGrid || !moreGrid) return;
+
+    const tilesOrdered = [...qsa("[data-tile]", mostGrid), ...qsa("[data-tile]", moreGrid)];
+    if (!tilesOrdered.length) return;
+
+    const mostPill = qs("[data-most-pill]", mostSection);
+    const morePill = qs("[data-more-pill]", moreSection);
+
+    const measureColumns = () => {
+      const tiles = qsa("[data-tile]", mostGrid);
+      if (!tiles.length) return 1;
+      const top0 = tiles[0].offsetTop;
+      let cols = 0;
+      for (const t of tiles) {
+        if (Math.abs(t.offsetTop - top0) > 2) break;
+        cols += 1;
+      }
+      return Math.max(1, cols);
+    };
+
+    const assign = (mostCount) => {
+      const n = Math.max(0, Math.min(tilesOrdered.length, mostCount));
+      for (let i = 0; i < tilesOrdered.length; i++) {
+        const tile = tilesOrdered[i];
+        if (i < n) mostGrid.appendChild(tile);
+        else moreGrid.appendChild(tile);
+      }
+      const moreCount = tilesOrdered.length - n;
+      moreSection.hidden = moreCount <= 0;
+      if (mostPill) mostPill.textContent = `Top ${n}`;
+      if (morePill) morePill.textContent = moreCount > 0 ? `${moreCount} more` : "";
+    };
+
+    const reflow = () => {
+      // Seed enough tiles into the first grid so we can measure columns reliably.
+      const seed = Math.min(tilesOrdered.length, 64);
+      for (let i = 0; i < tilesOrdered.length; i++) {
+        const tile = tilesOrdered[i];
+        if (i < seed) mostGrid.appendChild(tile);
+        else moreGrid.appendChild(tile);
+      }
+      const cols = measureColumns();
+      // User request: cap "Most relevant" to two rows.
+      const desired = Math.min(tilesOrdered.length, cols * 2);
+      assign(desired);
+    };
+
+    let raf1 = 0;
+    let raf2 = 0;
+    const schedule = () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+      raf1 = window.requestAnimationFrame(() => {
+        raf2 = window.requestAnimationFrame(reflow);
+      });
+    };
+
+    schedule();
+    window.addEventListener("resize", schedule, { passive: true });
+    window.addEventListener("pb:thumbsize", schedule);
+  }
+
+  function initThumbLoading() {
+    const imgs = qsa('img[data-src]');
+    if (!imgs.length) return;
+
+    const placeholderSrc = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
+    const loadOne = (img) => {
+      const src = img.getAttribute('data-src');
+      if (!src) return;
+      img.setAttribute('src', src);
+      img.removeAttribute('data-src');
+    };
+
+    // No IntersectionObserver: just load everything (browser will still apply its own limits).
+    if (typeof window.IntersectionObserver !== "function") {
+      imgs.forEach(loadOne);
+      return { cancel: () => {} };
+    }
+
+    // Prefetch a few rows ahead/behind the viewport, but throttle actual loading
+    // so we don't kick off hundreds of image fetches/decodes at once.
+    const gapPx = 10;
+    const prefetchRows = 2;
+    const getPrefetchPx = () => {
+      let thumbSizePx = 200;
+      try {
+        const v = getComputedStyle(root).getPropertyValue("--thumbSize");
+        const n = parseInt(String(v).trim().replace("px", ""), 10);
+        if (Number.isFinite(n) && n > 0) thumbSizePx = n;
+      } catch (_) {}
+      return Math.max(400, (thumbSizePx + gapPx) * prefetchRows);
+    };
+
+    // Keep this low: browsers limit concurrent connections per origin (often ~6),
+    // and the status SSE stream also uses one.
+    const maxInflight = 3;
+    let inflight = 0;
+    const queue = [];
+    const queued = new Set();
+    const pending = new Set();
+    const inFlightSrc = new WeakMap();
+    let canceled = false;
+
+    const isNearViewport = (img) => {
+      const prefetchPx = getPrefetchPx();
+      const r = img.getBoundingClientRect();
+      const topOk = r.bottom >= -prefetchPx;
+      const botOk = r.top <= window.innerHeight + prefetchPx;
+      return topOk && botOk;
+    };
+
+    const pruneQueue = () => {
+      const prefetchPx = getPrefetchPx();
+      const keepPx = prefetchPx * 2;
+      const maxQ = 500;
+      if (queue.length <= maxQ) return;
+      const kept = [];
+      for (const img of queue) {
+        if (!img || !img.isConnected) continue;
+        const r = img.getBoundingClientRect();
+        const topOk = r.bottom >= -keepPx;
+        const botOk = r.top <= window.innerHeight + keepPx;
+        if (topOk && botOk) kept.push(img);
+      }
+      queue.length = 0;
+      queue.push(...kept);
+    };
+
+    const pump = () => {
+      if (canceled) return;
+      pruneQueue();
+      while (inflight < maxInflight && queue.length) {
+        let img = null;
+        // Prefer items near the viewport; avoid loading far-off thumbnails just because
+        // the user scrolled quickly at some point.
+        for (let i = 0; i < queue.length; i++) {
+          const cand = queue[i];
+          if (!cand || !cand.isConnected) continue;
+          if (!isNearViewport(cand)) continue;
+          img = cand;
+          queue.splice(i, 1);
+          break;
+        }
+        if (!img) break;
+        if (!img || !img.isConnected) continue;
+        const src = img.getAttribute("data-src");
+        if (!src) continue;
+        inFlightSrc.set(img, src);
+        inflight += 1;
+        pending.add(img);
+        img.setAttribute("src", src);
+        img.removeAttribute("data-src");
+        const done = () => {
+          if (!pending.has(img)) return;
+          pending.delete(img);
+          inflight = Math.max(0, inflight - 1);
+          pump();
+        };
+        // Use once listeners so repeated events don't double-decrement.
+        img.addEventListener("load", done, { once: true });
+        img.addEventListener("error", done, { once: true });
+      }
+    };
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const ent of entries) {
+          if (!ent.isIntersecting) continue;
+          const img = ent.target;
+          if (!queued.has(img)) {
+            queued.add(img);
+            queue.push(img);
+          }
+          io.unobserve(img);
+        }
+        pump();
+      },
+      { root: null, rootMargin: `${getPrefetchPx()}px 0px ${getPrefetchPx()}px 0px`, threshold: 0.01 },
+    );
+
+    imgs.forEach((img) => io.observe(img));
+    window.addEventListener("scroll", pump, { passive: true });
+    window.addEventListener("resize", pump);
+    return {
+      cancel: () => {
+        canceled = true;
+        try {
+          io.disconnect();
+        } catch (_) {}
+        window.removeEventListener("scroll", pump);
+        window.removeEventListener("resize", pump);
+        queue.length = 0;
+        queued.clear();
+        // Cancel in-flight image requests by swapping to a tiny placeholder.
+        for (const img of Array.from(pending)) {
+          try {
+            const src = inFlightSrc.get(img);
+            if (src) img.setAttribute("data-src", src);
+            img.setAttribute("src", placeholderSrc);
+          } catch (_) {}
+        }
+        pending.clear();
+        inflight = 0;
+      },
+    };
+  }
 
   function initStatus() {
     const el = qs("[data-status]");
-    if (!el) return;
+    if (!el) return { shutdown: () => {} };
     const text = qs("[data-status-text]", el);
     const spinner = qs("[data-status-spinner]", el);
     const dot = qs("[data-status-dot]", el);
@@ -441,8 +684,34 @@
     const diagKpis = qs("[data-diag-kpis]");
 
     let lastStatusAt = 0;
+    let stopped = false;
+    let es = null;
+    let stallInterval = null;
+    let pollInterval = null;
+    let pollTimeout = null;
+    let pollAbort = null;
+
+    const shutdown = () => {
+      if (stopped) return;
+      stopped = true;
+      try {
+        es?.close?.();
+      } catch (_) {}
+      es = null;
+      if (stallInterval) window.clearInterval(stallInterval);
+      if (pollInterval) window.clearInterval(pollInterval);
+      if (pollTimeout) window.clearTimeout(pollTimeout);
+      stallInterval = null;
+      pollInterval = null;
+      pollTimeout = null;
+      try {
+        pollAbort?.abort?.();
+      } catch (_) {}
+      pollAbort = null;
+    };
 
     function applyStatus(s) {
+      if (stopped) return;
       if (s && typeof s === "object" && s.error) {
         dot?.classList.toggle("live", false);
         if (text) text.textContent = "Status error";
@@ -549,8 +818,11 @@
     }
 
     async function pollFallback() {
+      if (stopped) return;
       try {
-        const r = await fetch("/api/status", { cache: "no-store" });
+        pollAbort?.abort?.();
+        pollAbort = new AbortController();
+        const r = await fetch("/api/status", { cache: "no-store", signal: pollAbort.signal });
         if (!r.ok) throw new Error("bad status");
         const s = await r.json();
         applyStatus(s);
@@ -562,8 +834,9 @@
     }
 
     if (typeof window.EventSource === "function") {
-      const es = new EventSource("/api/status/stream");
+      es = new EventSource("/api/status/stream");
       es.onmessage = (ev) => {
+        if (stopped) return;
         try {
           const s = JSON.parse(ev.data);
           applyStatus(s);
@@ -572,21 +845,24 @@
         }
       };
       es.onerror = () => {
+        if (stopped) return;
         // EventSource auto-reconnects; show degraded state briefly.
         dot?.classList.toggle("live", false);
         if (text) text.textContent = "Reconnecting…";
         // Keep UI alive even if SSE is flaky.
-        window.setTimeout(pollFallback, 800);
+        pollTimeout = window.setTimeout(pollFallback, 800);
       };
 
       // Safety net: if SSE stalls, keep updating via polling.
-      window.setInterval(() => {
+      stallInterval = window.setInterval(() => {
         const age = Date.now() - lastStatusAt;
         if (age > 6500) pollFallback();
       }, 3000);
     } else {
       pollFallback();
-      window.setInterval(pollFallback, 4000);
+      pollInterval = window.setInterval(pollFallback, 4000);
     }
+
+    return { shutdown };
   }
 })();

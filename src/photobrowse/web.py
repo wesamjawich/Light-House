@@ -247,6 +247,34 @@ def create_app(
         offset: int,
         limit: int,
     ):
+        def _pick_relevance_split(scores_desc: list[float]) -> int:
+            """
+            Pick an "elbow" in the similarity curve so we can separate highly relevant
+            results from the long tail. Returns a count (>=1).
+            """
+            n = len(scores_desc)
+            if n <= 0:
+                return 0
+            if n < 30:
+                return min(n, 18)
+            max_i = min(n - 1, 160)
+            min_i = min(12, max_i)
+            best_drop = 0.0
+            best_i = min(48, max_i)
+            # Look for the largest drop between adjacent scores within the top range.
+            for i in range(1, max_i + 1):
+                if i < min_i:
+                    continue
+                drop = float(scores_desc[i - 1]) - float(scores_desc[i])
+                if drop > best_drop:
+                    best_drop = drop
+                    best_i = i
+            # Require a meaningful gap, otherwise fall back to a sane default.
+            top = float(scores_desc[0])
+            if best_drop < max(0.02, top * 0.06):
+                best_i = min(48, max_i)
+            return max(1, int(best_i))
+
         year_i = _parse_int(year)
         month_i = _parse_int(month)
         day_i = _parse_int(day)
@@ -268,6 +296,7 @@ def create_app(
         photo_rows = []
         scores: dict[int, float] = {}
         total_matches: Optional[int] = None
+        most_relevant_count: Optional[int] = None
 
         q2 = q.strip()
         if q2:
@@ -287,6 +316,9 @@ def create_app(
             k = base_k
             attempts = 0
             filtered_hits: list[tuple[int, float]] = []
+            relevant_cutoff: Optional[float] = None
+            min_keep_score: Optional[float] = None
+            eligible_hits: list[tuple[int, float]] = []
             # Timings for the last attempt (best-effort for logging).
             t_search0 = t2
             t_search1 = t2
@@ -297,6 +329,8 @@ def create_app(
                 t_search0 = time.perf_counter()
                 hits = vector_index.search(vec, k=k)
                 t_search1 = time.perf_counter()
+                # Ensure descending similarity order (hnswlib is usually ordered but not guaranteed).
+                hits = sorted(hits, key=lambda x: float(x[1]), reverse=True)
                 ids_all = [int(pid) for pid, _ in hits]
                 if not ids_all:
                     break
@@ -339,12 +373,48 @@ def create_app(
                 rows = _web_fetchall(query, params2)
                 t_db2 = time.perf_counter()
                 by_id = {int(r["id"]): r for r in rows}
-                filtered_hits = [(pid, score) for pid, score in hits if int(pid) in by_id]
+                filtered_hits = [(int(pid), float(score)) for pid, score in hits if int(pid) in by_id]
+                if not filtered_hits:
+                    # If we just deleted stale ids, try again with the same k.
+                    if missing_ids:
+                        continue
+                    if k >= max_k:
+                        break
+                    k = min(max_k, k + base_k)
+                    continue
 
-                if len(filtered_hits) >= offset + limit or k >= max_k:
-                    photo_rows = [by_id[int(pid)] for pid, _ in filtered_hits[offset : offset + limit]]
-                    scores = {int(pid): float(score) for pid, score in filtered_hits[offset : offset + limit]}
-                    total_matches = None
+                if min_keep_score is None:
+                    # Compute a "most relevant" cutoff from the similarity curve, then
+                    # a "min keep" cutoff that trims the long tail so results don't go on forever.
+                    scores_desc = [s for _, s in filtered_hits[: min(300, len(filtered_hits))]]
+                    split_n = _pick_relevance_split(scores_desc)
+                    split_n = max(1, min(split_n, len(scores_desc)))
+                    relevant_cutoff = float(scores_desc[split_n - 1])
+                    top = float(scores_desc[0])
+                    floor = 0.18 if top < 0.28 else 0.22
+                    min_keep_score = float(max(floor, relevant_cutoff - 0.10))
+                    # Never keep below our "most relevant" cutoff.
+                    min_keep_score = float(min(min_keep_score, relevant_cutoff))
+
+                eligible_hits = [(pid, score) for pid, score in filtered_hits if score >= float(min_keep_score)]
+                last_score = float(filtered_hits[-1][1])
+                # We consider the list "complete enough" when either:
+                # - we've reached the index cap, OR
+                # - the tail already dropped below the keep threshold (so further results won't qualify).
+                complete = bool(k >= max_k or last_score < float(min_keep_score))
+
+                if complete or len(eligible_hits) >= offset + limit:
+                    # Use eligible_hits to avoid returning endless low-relevance results.
+                    slice_hits = eligible_hits[offset : offset + limit]
+                    photo_rows = [by_id[int(pid)] for pid, _ in slice_hits if int(pid) in by_id]
+                    scores = {int(pid): float(score) for pid, score in slice_hits}
+                    total_matches = len(eligible_hits)
+                    if offset == 0 and relevant_cutoff is not None:
+                        # Cap the highlighted section so the "more results" section is visible.
+                        most_relevant_count = min(
+                            len(photo_rows),
+                            max(12, min(72, sum(1 for _, sc in eligible_hits[:200] if sc >= float(relevant_cutoff)))),
+                        )
                     break
 
                 # If we pruned stale ids, re-query at the same k first.
@@ -353,13 +423,16 @@ def create_app(
                 k = min(max_k, k + base_k)
             t3 = time.perf_counter()
             logger.info(
-                "Semantic search q=%r offset=%s limit=%s rows=%s attempts=%s k=%s embed=%.2fs hnsw=%.2fs db1=%.2fs db2=%.2fs total=%.2fs",
+                "Semantic search q=%r offset=%s limit=%s rows=%s total=%s attempts=%s k=%s keep>=%.3f rel>=%.3f embed=%.2fs hnsw=%.2fs db1=%.2fs db2=%.2fs total_time=%.2fs",
                 q2,
                 offset,
                 limit,
                 len(photo_rows),
+                total_matches,
                 attempts,
                 k,
+                float(min_keep_score or 0.0),
+                float(relevant_cutoff or 0.0),
                 (t2 - t1),
                 (t_search1 - t_search0),
                 (t_db1 - t_search1),
@@ -386,6 +459,7 @@ def create_app(
             "has_more": has_more,
             "next_offset": offset + limit,
             "total_matches": total_matches,
+            "most_relevant_count": most_relevant_count,
             "year": year or "",
             "month": month or "",
             "day": day or "",
