@@ -1,0 +1,2 @@
+recursive-include src/photobrowse/templates *.html
+recursive-include src/photobrowse/static *.css *.js

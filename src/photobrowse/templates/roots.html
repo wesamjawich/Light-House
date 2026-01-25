@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Roots - PhotoBrowse</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <style>
+      table { border-collapse: collapse; width: min(1260px, 96vw); margin-top: 16px; }
+      td, th { border-bottom: 1px solid var(--border); padding: 12px 10px; text-align: left; }
+      th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.2px; text-transform: uppercase; }
+      td { color: var(--text); font-size: 13px; }
+      .row { display:flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      input[type="text"] { all: unset; padding: 12px 14px; width: min(720px, 88vw); border: 1px solid var(--border); border-radius: 999px; background: var(--panel); }
+      button { padding: 10px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); cursor: pointer; }
+      button:hover { background: color-mix(in oklab, var(--panel2) 80%, var(--accent)); }
+      .muted { color: var(--muted); }
+      code { background: var(--panel); padding: 2px 6px; border-radius: 8px; border: 1px solid var(--border); }
+    </style>
+  </head>
+  <body>
+    <div class="appbar">
+      <div class="appbar-inner">
+        <a class="brand" href="/">
+          <div class="logo"></div>
+          <div>
+            <div class="brand-title">PhotoBrowse</div>
+            <div class="brand-sub">Tracked roots</div>
+          </div>
+        </a>
+        <div class="appbar-main"></div>
+        <div class="appbar-nav">
+          <div class="status-mini" data-status>
+            <div class="dot" data-status-dot></div>
+            <div class="spinner" data-status-spinner></div>
+            <div class="status-mini-text" data-status-text>…</div>
+          </div>
+          <a class="btn-link" href="/">Library</a>
+          <a class="btn-link" href="/diagnostics">Diagnostics</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+
+      <div class="row" style="margin-top: 6px;">
+        <form action="/roots/add" method="post" style="margin:0; display:flex; gap:12px; align-items:center; flex-wrap:wrap; flex: 1 1 520px;">
+          <input type="text" name="path" placeholder="/Volumes/T7/film scans/" style="flex:1 1 520px;" />
+          <button type="submit">Add & scan</button>
+        </form>
+        <form action="/roots/pick" method="post" style="margin:0;">
+          <button type="submit">Pick folder…</button>
+        </form>
+      </div>
+      <div class="muted" style="margin-top:10px;">Scans recursively for JPG/PNG. Does not move files.</div>
+
+      <form action="/roots/scan" method="post" style="margin-top: 12px;">
+        <button type="submit">Scan all now</button>
+      </form>
+
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Path</th>
+            <th>Status</th>
+            <th>Last seen</th>
+            <th>Scan enumerated</th>
+            <th>Scan finished</th>
+            <th>Last error</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in roots %}
+          <tr>
+            <td>{{ r["id"] }}</td>
+            <td><code>{{ r["path"] }}</code></td>
+            <td>{{ r["status"] }}</td>
+            <td class="muted">{{ r["last_seen_at"] or "" }}</td>
+            <td class="muted">{{ r["last_scan_enumerated_at"] or "" }}</td>
+            <td class="muted">{{ r["last_scan_finished_at"] or "" }}</td>
+            <td class="muted">{{ r["last_error"] or "" }}</td>
+            <td>
+              <form action="/roots/{{ r['id'] }}/remove" method="post" onsubmit="return confirm('Stop tracking this root?');">
+                <button type="submit">Remove</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

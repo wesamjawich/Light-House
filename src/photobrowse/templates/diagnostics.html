@@ -1,0 +1,179 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Diagnostics - PhotoBrowse</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <style>
+      .card{ border: 1px solid var(--border); background: var(--panel); border-radius: 14px; padding: 14px; margin-top: 12px; }
+      code{ background: color-mix(in oklab, var(--panel2) 80%, transparent); border: 1px solid var(--border); padding: 2px 6px; border-radius: 8px; }
+      .k{ color: var(--muted); font-size: 12px; }
+      .v{ color: var(--text); font-size: 13px; }
+      .grid2{ display:grid; grid-template-columns: 1fr; gap: 10px; }
+      @media(min-width: 980px){ .grid2{ grid-template-columns: 1fr 1fr; } }
+      ul{ margin: 8px 0 0; padding-left: 18px; }
+      li{ margin: 6px 0; color: var(--muted); font-size: 13px; }
+      .err{ color: #ff8a80; }
+      .ok{ color: #a5d6a7; }
+      select{
+        all: unset;
+        padding: 10px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--text);
+        width: min(560px, 92vw);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="appbar">
+      <div class="appbar-inner">
+        <a class="brand" href="/">
+          <div class="logo"></div>
+          <div>
+            <div class="brand-title">PhotoBrowse</div>
+            <div class="brand-sub">Diagnostics</div>
+          </div>
+        </a>
+        <div class="appbar-main"></div>
+        <div class="appbar-nav">
+          <div class="status-mini" data-status>
+            <div class="dot" data-status-dot></div>
+            <div class="spinner" data-status-spinner></div>
+            <div class="status-mini-text" data-status-text>…</div>
+          </div>
+          <a class="btn-link" href="/">Library</a>
+          <a class="btn-link" href="/roots">Roots</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="hint">Status + local data locations. This runs fully on-device.</div>
+
+      <div class="grid2">
+        <div class="card" data-diag-kpis style="grid-column: 1 / -1;">
+          <div class="k">Library</div>
+          <div class="kpi-row" style="margin-top:12px;">
+            <div class="kpi">
+              <div class="kpi-k">Total photos</div>
+              <div class="kpi-v" data-kpi-photos>0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-k">Indexed</div>
+              <div class="kpi-v" data-kpi-indexed>0</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-k">Failed</div>
+              <div class="kpi-v" data-kpi-failed>0</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" data-diag-activity style="grid-column: 1 / -1;">
+          <div class="k">Indexing</div>
+
+          <div class="diag-top">
+            <div class="diag-state" data-diag-state>…</div>
+            <div class="diag-meta">
+              <span class="pill-mini err" data-diag-failed hidden><span data-diag-failed-count>0</span> failed</span>
+            </div>
+          </div>
+
+          <div class="diag-progress">
+            <div class="diag-progress-head">
+              <div class="diag-label">Indexing</div>
+              <div class="diag-right">
+                <span data-diag-processed>0</span>/<span data-diag-enqueued>0</span>
+                <span class="diag-pct" data-diag-pct>—</span>
+              </div>
+            </div>
+            <progress class="progress progress-lg" data-diag-progress max="1" value="0"></progress>
+          </div>
+
+          <div class="diag-progress" data-diag-scan hidden>
+            <div class="diag-progress-head">
+              <div class="diag-label">Scanning</div>
+              <div class="diag-right"><span data-diag-found>0</span> found</div>
+            </div>
+            <div class="progress-indeterminate"></div>
+          </div>
+
+          <div class="diag-rows">
+            <div class="diag-row">
+              <div class="k">Root</div>
+              <code class="path" data-diag-root>{{ stats.active_scan_root_path or "—" }}</code>
+            </div>
+            <div class="diag-row">
+              <div class="k">Current file</div>
+              <code class="path" data-diag-current>{{ stats.active_ingest_path or "—" }}</code>
+            </div>
+          </div>
+
+          <div class="diag-last" data-diag-last-failed hidden>
+            <div class="k">Last failure</div>
+            <div class="v err" style="margin-top:8px;">
+              <code class="path" data-diag-last-failed-path>—</code>
+            </div>
+            <div class="v err" style="margin-top:8px;">
+              <code class="path" data-diag-last-failed-error>—</code>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <details class="card" style="margin-top:14px;">
+        <summary class="k" style="cursor:pointer;">ML (semantic search)</summary>
+        <div style="margin-top:10px;">
+          {% if clip["enabled"] %}
+            {% if clip["available"] %}
+              <div class="v ok" style="margin-top:8px;">Enabled</div>
+            {% else %}
+              <div class="v err" style="margin-top:8px;">Enabled, but not loadable</div>
+              <div class="v err" style="margin-top:8px;"><code>{{ clip["error"] }}</code></div>
+            {% endif %}
+            <div class="v" style="margin-top:8px;">Model: <code>{{ clip["model_id"] }}</code></div>
+            <div class="v" style="margin-top:8px;">Dim: <code>{{ clip["dim"] }}</code></div>
+            <div class="v" style="margin-top:8px;">Device: <code>{{ clip["device"] }}</code></div>
+          {% else %}
+            <div class="v">Disabled (started with <code>--enable-clip false</code>)</div>
+          {% endif %}
+        </div>
+      </details>
+
+      <details class="card" style="margin-top:14px;">
+        <summary class="k" style="cursor:pointer;">Storage</summary>
+        <div style="margin-top:10px;">
+          <div class="v" style="margin-top:8px;">SQLite DB: <code>{{ paths.db_path }}</code></div>
+          <div class="v" style="margin-top:8px;">Thumbnails: <code>{{ paths.thumbs_dir }}</code></div>
+          {% if index_meta %}
+            <div class="v" style="margin-top:8px;">Vector index: <code>{{ index_meta["dir"] }}</code></div>
+            <div class="v" style="margin-top:8px;">HNSW data: <code>{{ index_meta["bin_path"] }}</code></div>
+          {% endif %}
+          <details style="margin-top:10px;">
+            <summary class="k" style="cursor:pointer;">DB tips</summary>
+            <ul>
+              <li>Open DB: <code>sqlite3 "{{ paths.db_path }}"</code></li>
+              <li>Tables: <code>tracked_roots</code>, <code>photos</code></li>
+              <li>Example: <code>select count(*) from photos;</code></li>
+            </ul>
+          </details>
+        </div>
+      </details>
+
+      <details class="card" style="margin-top:14px;">
+        <summary class="k" style="cursor:pointer;">Tracked roots</summary>
+        <ul>
+          {% for r in roots %}
+            <li><code>{{ r["status"] }}</code> {{ r["path"] }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

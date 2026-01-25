@@ -1,0 +1,30 @@
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+.env/
+
+# Logs
+*.log
+
+# Local app data / indices (never commit)
+.localdata*/
+
+# Editor
+.vscode/
+.idea/

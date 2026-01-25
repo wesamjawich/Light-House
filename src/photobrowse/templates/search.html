@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Library - PhotoBrowse</title>
+    <link rel="stylesheet" href="/static/app.css" />
+  </head>
+  <body>
+    <div class="appbar">
+      <div class="appbar-inner">
+        <a class="brand" href="/">
+          <div class="logo"></div>
+          <div>
+            <div class="brand-title">PhotoBrowse</div>
+            <div class="brand-sub">Library</div>
+          </div>
+        </a>
+
+        <div class="appbar-main">
+          <form class="searchbar" action="/" method="get">
+            <input type="hidden" name="offset" value="0" />
+            {# Semantic searches can return a lot of results; keep the default page size smaller for responsiveness. #}
+            {% set limit_for_form = 160 if q.strip() else limit %}
+            <input type="hidden" name="limit" value="{{ limit_for_form }}" />
+            <span class="searchbar-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20">
+                <path fill="currentColor" d="M10 4a6 6 0 104.472 10.03l3.749 3.75a1 1 0 001.415-1.415l-3.75-3.749A6 6 0 0010 4zm-4 6a4 4 0 118 0 4 4 0 01-8 0z"/>
+              </svg>
+            </span>
+            <input class="searchbar-input" type="text" name="q" value="{{ q }}" placeholder="Search your photos" />
+            <details class="filters">
+              <summary class="filters-btn" title="Filters">Filters</summary>
+              <div class="filters-panel" role="dialog" aria-label="Filters">
+                <div class="filters-row">
+                  <label class="filters-field">
+                    <div class="filters-label">Year</div>
+                    <input type="text" name="year" value="{{ year }}" placeholder="2023" />
+                  </label>
+                  <label class="filters-field">
+                    <div class="filters-label">Month</div>
+                    <input type="text" name="month" value="{{ month }}" placeholder="7" />
+                  </label>
+                  <label class="filters-field">
+                    <div class="filters-label">Day</div>
+                    <input type="text" name="day" value="{{ day }}" placeholder="14" />
+                  </label>
+                </div>
+                <div class="filters-actions">
+                  <button class="btn" type="submit">Apply</button>
+                </div>
+              </div>
+            </details>
+          </form>
+        </div>
+
+        <div class="appbar-nav">
+          <div class="status-mini" data-status>
+            <div class="dot" data-status-dot></div>
+            <div class="spinner" data-status-spinner></div>
+            <div class="status-mini-text" data-status-text>…</div>
+          </div>
+          <a class="btn-link" href="/roots">Roots</a>
+          <a class="btn-link" href="/diagnostics">Diagnostics</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="hint">
+        {% if q.strip() %}
+          Semantic results for “{{ q }}”. (Esc closes viewer; scroll zooms; drag pans)
+        {% else %}
+          All photos by date. Add a query for semantic search.
+        {% endif %}
+        {% if total_matches is not none %}
+          <span style="margin-left:10px;">Showing {{ offset + 1 }}–{{ offset + rows|length }} of {{ total_matches }}.</span>
+        {% endif %}
+      </div>
+
+      <div class="grid" data-grid>
+        {% for r in rows %}
+          {% set eager = loop.index0 < 36 %}
+          <div
+            class="tile"
+            data-tile
+            data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+            data-caption="{{ r['rel_path'] }}"
+          >
+            <img
+              src="/thumb/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
+              loading="{{ 'eager' if eager else 'lazy' }}"
+              fetchpriority="{{ 'high' if eager else 'low' }}"
+              decoding="async"
+              alt="{{ r['rel_path'] }}"
+            />
+            <div class="tile-meta">
+              <div title="{{ r['path'] }}">{{ r["rel_path"] }}</div>
+              <div class="muted">{{ r["date_taken"] or "" }}</div>
+            </div>
+            {% if scores.get(r["id"]) %}
+              <div class="score">{{ "%.3f"|format(scores.get(r["id"])) }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+
+      {% if has_more %}
+        <form action="/" method="get" style="margin-top: 18px; display:flex; justify-content:center;">
+          <input type="hidden" name="q" value="{{ q }}" />
+          <input type="hidden" name="year" value="{{ year }}" />
+          <input type="hidden" name="month" value="{{ month }}" />
+          <input type="hidden" name="day" value="{{ day }}" />
+          <input type="hidden" name="offset" value="{{ next_offset }}" />
+          <input type="hidden" name="limit" value="{{ limit }}" />
+          <button type="submit">Load more</button>
+        </form>
+      {% endif %}
+    </div>
+
+    <div class="viewer" data-viewer aria-hidden="true">
+      <div class="viewer-backdrop" data-viewer-backdrop></div>
+      <div class="viewer-topbar">
+        <div class="left">
+          <button class="viewer-btn" type="button" data-viewer-close>Close</button>
+          <div class="viewer-caption" data-viewer-caption></div>
+        </div>
+        <div class="right">
+          <button class="viewer-btn" type="button" data-viewer-zoom-out>−</button>
+          <button class="viewer-btn" type="button" data-viewer-reset>Reset</button>
+          <button class="viewer-btn" type="button" data-viewer-zoom-in>+</button>
+          <a class="viewer-btn" data-viewer-open target="_blank" rel="noopener">Open</a>
+        </div>
+      </div>
+      <div class="viewer-stage" data-viewer-stage>
+      </div>
+    </div>
+
+    <div class="toast" data-toast> </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

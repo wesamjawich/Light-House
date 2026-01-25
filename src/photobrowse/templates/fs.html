@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browse folders - PhotoBrowse</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <style>
+      ul { padding-left: 18px; }
+      li { margin: 8px 0; }
+      code { background: var(--panel); padding: 2px 6px; border-radius: 8px; border: 1px solid var(--border); }
+      .err { color: #ff8a80; }
+      input[type="text"] { all: unset; padding: 12px 14px; width: min(720px, 88vw); border: 1px solid var(--border); border-radius: 999px; background: var(--panel); }
+      button { padding: 10px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); cursor: pointer; }
+      button:hover { background: color-mix(in oklab, var(--panel2) 80%, var(--accent)); }
+      .row { display:flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    </style>
+  </head>
+  <body>
+    <div class="appbar">
+      <div class="appbar-inner">
+        <a class="brand" href="/">
+          <div class="logo"></div>
+          <div>
+            <div class="brand-title">PhotoBrowse</div>
+            <div class="brand-sub">Folder picker</div>
+          </div>
+        </a>
+        <div class="appbar-main"></div>
+        <div class="appbar-nav">
+          <div class="status-mini" data-status>
+            <div class="dot" data-status-dot></div>
+            <div class="spinner" data-status-spinner></div>
+            <div class="status-mini-text" data-status-text>…</div>
+          </div>
+          <a class="btn-link" href="/">Library</a>
+          <a class="btn-link" href="/roots">Roots</a>
+          <a class="btn-link" href="/diagnostics">Diagnostics</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="container">
+      {% if error %}
+        <p class="err">{{ error }}</p>
+      {% endif %}
+
+      <p class="hint">Current: <code>{{ path }}</code></p>
+
+      <div class="row">
+        <a class="btn-link" href="/fs?path={{ parent_q }}{% if show_hidden %}&show_hidden=true{% endif %}">⬅ Parent</a>
+        <form action="/roots/add" method="post">
+          <input type="hidden" name="path" value="{{ path }}" />
+          <button type="submit">Select this folder (add & scan)</button>
+        </form>
+      </div>
+
+      <form action="/fs" method="get" style="margin-top: 14px;">
+        <div class="row">
+          <input type="text" name="path" value="{{ path }}" />
+          {% if show_hidden %}
+            <input type="hidden" name="show_hidden" value="true" />
+          {% endif %}
+          <button type="submit">Go</button>
+        </div>
+        <div class="hint">
+          Tip: External drives on macOS usually appear under <code>/Volumes</code>.
+        </div>
+      </form>
+
+      <div style="margin-top: 18px;">
+        <div class="row">
+          <h2 style="margin:0;">Subfolders</h2>
+          {% if show_hidden %}
+            <a class="btn-link" href="/fs?path={{ path_q }}">Hide hidden</a>
+          {% else %}
+            <a class="btn-link" href="/fs?path={{ path_q }}&show_hidden=true">Show hidden</a>
+          {% endif %}
+        </div>
+        <ul>
+          {% for it in items %}
+            <li><a href="/fs?path={{ it['q'] }}{% if show_hidden %}&show_hidden=true{% endif %}">{{ it["name"] }}</a></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
