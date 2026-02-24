@@ -4,8 +4,10 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -141,6 +143,8 @@ def create_app(
         "roots_online": 0,
     }
     counts_interval_s = float(os.environ.get("PHOTOBROWSE_STATUS_COUNTS_INTERVAL_S", "30"))
+    status_busy_interval_s = float(os.environ.get("PHOTOBROWSE_STATUS_BUSY_INTERVAL_S", "0.25"))
+    status_idle_interval_s = float(os.environ.get("PHOTOBROWSE_STATUS_IDLE_INTERVAL_S", "0.25"))
 
     app = FastAPI(title="PhotoBrowse", docs_url=None, redoc_url=None)
     static_dir = Path(__file__).parent / "static"
@@ -241,6 +245,7 @@ def create_app(
     def _library_rows(
         *,
         q: str,
+        folder: Optional[str],
         year: Optional[str],
         month: Optional[str],
         day: Optional[str],
@@ -275,6 +280,39 @@ def create_app(
                 best_i = min(48, max_i)
             return max(1, int(best_i))
 
+        def _path_token_match_ids(
+            query_text: str,
+            *,
+            exclude_ids: set[int],
+        ) -> list[int]:
+            # Hybrid fallback: include path/name token matches so textual folder/file
+            # queries are not lost due to semantic score cutoffs.
+            tokens = re.findall(r"[a-z0-9]{2,}", query_text.lower())
+            if not tokens:
+                return []
+            # Keep SQL bounded for very long queries.
+            tokens = tokens[:8]
+            clauses: list[str] = []
+            params3: list[object] = []
+            for tok in tokens:
+                pat = f"%{tok}%"
+                clauses.append("(lower(path) LIKE ? OR lower(rel_path) LIKE ?)")
+                params3.extend([pat, pat])
+            q3 = "SELECT id FROM photos WHERE " + " AND ".join(clauses)
+            if where:
+                q3 += " AND " + " AND ".join(where)
+                params3 += params
+            # Keep fallback bounded; these are appended after semantic hits.
+            q3 += " ORDER BY date_taken DESC LIMIT 4000"
+            rows3 = _web_fetchall(q3, params3)
+            out: list[int] = []
+            for r in rows3:
+                pid = int(r["id"])
+                if pid in exclude_ids:
+                    continue
+                out.append(pid)
+            return out
+
         year_i = _parse_int(year)
         month_i = _parse_int(month)
         day_i = _parse_int(day)
@@ -292,6 +330,21 @@ def create_app(
         if day_i is not None:
             where.append("strftime('%d', date_taken) = ?")
             params.append(f"{day_i:02d}")
+        folder_q = (folder or "").strip()
+        if folder_q:
+            sep = "\\" if ("\\" in folder_q and "/" not in folder_q) else "/"
+            folder_base = folder_q.rstrip("/\\")
+            if folder_base:
+                folder_prefix = folder_base + sep
+                where.append("path LIKE ?")
+                params.append(f"{folder_prefix}%")
+                # Keep only direct children of this folder, not nested subfolders.
+                where.append("instr(substr(path, ?), ?) = 0")
+                params.append(len(folder_prefix) + 1)
+                params.append(sep)
+                folder_q = folder_base
+            else:
+                folder_q = ""
 
         photo_rows = []
         scores: dict[int, float] = {}
@@ -302,6 +355,7 @@ def create_app(
         if q2:
             if not (embedder and vector_index):
                 raise HTTPException(status_code=400, detail="Content search disabled (install clip extras).")
+            query_tokens = re.findall(r"[a-z0-9]{2,}", q2.lower())
             t0 = time.perf_counter()
             # Fetch hits and map them back to existing photos.
             # The vector index can contain stale ids (e.g., after untracking a root);
@@ -319,6 +373,8 @@ def create_app(
             relevant_cutoff: Optional[float] = None
             min_keep_score: Optional[float] = None
             eligible_hits: list[tuple[int, float]] = []
+            semantic_total = 0
+            lexical_total = 0
             # Timings for the last attempt (best-effort for logging).
             t_search0 = t2
             t_search1 = t2
@@ -391,7 +447,12 @@ def create_app(
                     split_n = max(1, min(split_n, len(scores_desc)))
                     relevant_cutoff = float(scores_desc[split_n - 1])
                     top = float(scores_desc[0])
-                    floor = 0.18 if top < 0.28 else 0.22
+                    # Short object queries (e.g., "snake") can be semantically noisy;
+                    # use a slightly lower floor to improve recall.
+                    if len(query_tokens) <= 2 and top < 0.30:
+                        floor = 0.16
+                    else:
+                        floor = 0.18 if top < 0.28 else 0.22
                     min_keep_score = float(max(floor, relevant_cutoff - 0.10))
                     # Never keep below our "most relevant" cutoff.
                     min_keep_score = float(min(min_keep_score, relevant_cutoff))
@@ -421,14 +482,40 @@ def create_app(
                 if missing_ids:
                     continue
                 k = min(max_k, k + base_k)
+
+            semantic_ids = [int(pid) for pid, _ in eligible_hits]
+            semantic_scores = {int(pid): float(score) for pid, score in eligible_hits}
+            semantic_total = len(semantic_ids)
+            lexical_ids = _path_token_match_ids(q2, exclude_ids=set(semantic_ids))
+            lexical_total = len(lexical_ids)
+            combined_ids = semantic_ids + lexical_ids
+            total_matches = len(combined_ids)
+            page_ids = combined_ids[offset : offset + limit]
+            if page_ids:
+                placeholders_page = ",".join(["?"] * len(page_ids))
+                page_rows = _web_fetchall(f"SELECT * FROM photos WHERE id IN ({placeholders_page})", page_ids)
+                by_id_page = {int(r["id"]): r for r in page_rows}
+                photo_rows = [by_id_page[int(pid)] for pid in page_ids if int(pid) in by_id_page]
+            else:
+                photo_rows = []
+            scores = {int(pid): float(semantic_scores[int(pid)]) for pid in page_ids if int(pid) in semantic_scores}
+            if offset == 0 and relevant_cutoff is not None and eligible_hits:
+                # Cap the highlighted section so the "more results" section is visible.
+                top_sem = sum(1 for _, sc in eligible_hits[:200] if sc >= float(relevant_cutoff))
+                most_relevant_count = min(
+                    len(photo_rows),
+                    max(12, min(72, top_sem)),
+                )
             t3 = time.perf_counter()
             logger.info(
-                "Semantic search q=%r offset=%s limit=%s rows=%s total=%s attempts=%s k=%s keep>=%.3f rel>=%.3f embed=%.2fs hnsw=%.2fs db1=%.2fs db2=%.2fs total_time=%.2fs",
+                "Semantic search q=%r offset=%s limit=%s rows=%s total=%s sem=%s path=%s attempts=%s k=%s keep>=%.3f rel>=%.3f embed=%.2fs hnsw=%.2fs db1=%.2fs db2=%.2fs total_time=%.2fs",
                 q2,
                 offset,
                 limit,
                 len(photo_rows),
                 total_matches,
+                semantic_total,
+                lexical_total,
                 attempts,
                 k,
                 float(min_keep_score or 0.0),
@@ -446,8 +533,11 @@ def create_app(
                 query += " WHERE " + " AND ".join(where)
                 count_query += " WHERE " + " AND ".join(where)
             total_matches = int(_web_fetchone(count_query, params)["c"])
-            query += " ORDER BY date_taken DESC LIMIT ? OFFSET ?"
-            params2 = list(params) + [limit, offset]
+            # Deterministic daily shuffle (stable across pagination within a day,
+            # rotates automatically each day for rediscovery).
+            shuffle_seed = int(datetime.now().strftime("%Y%m%d"))
+            query += " ORDER BY (((id * 1103515245) + ?) & 2147483647), id LIMIT ? OFFSET ?"
+            params2 = list(params) + [shuffle_seed, limit, offset]
             photo_rows = _web_fetchall(query, params2)
 
         has_more = len(photo_rows) == limit and (total_matches is None or (offset + limit) < total_matches)
@@ -464,19 +554,21 @@ def create_app(
             "month": month or "",
             "day": day or "",
             "q": q,
+            "folder": folder_q,
         }
 
     @app.get("/", response_class=HTMLResponse)
     def library(
         request: Request,
         q: str = Query(default=""),
+        folder: Optional[str] = Query(default=None),
         year: Optional[str] = Query(default=None),
         month: Optional[str] = Query(default=None),
         day: Optional[str] = Query(default=None),
         offset: int = Query(default=0),
         limit: int = Query(default=300),
     ) -> HTMLResponse:
-        ctx = _library_rows(q=q, year=year, month=month, day=day, offset=offset, limit=limit)
+        ctx = _library_rows(q=q, folder=folder, year=year, month=month, day=day, offset=offset, limit=limit)
         return templates.TemplateResponse("search.html", {"request": request, **ctx})
 
     def _status_payload() -> dict:
@@ -521,6 +613,20 @@ def create_app(
             "last_failed_path": s.last_failed_path,
             "last_failed_at": s.last_failed_at,
             "last_failed_error": s.last_failed_error,
+            "last_scan_root_id": s.last_scan_root_id,
+            "last_scan_root_path": s.last_scan_root_path,
+            "last_scan_found": s.last_scan_found,
+            "last_scan_enqueued": s.last_scan_enqueued,
+            "last_scan_processed": s.last_scan_processed,
+            "last_scan_started_at": s.last_scan_started_at,
+            "last_scan_ended_at": s.last_scan_ended_at,
+            "last_scan_had_errors": s.last_scan_had_errors,
+            "last_scan_wave_roots": s.last_scan_wave_roots,
+            "last_scan_wave_found": s.last_scan_wave_found,
+            "last_scan_wave_enqueued": s.last_scan_wave_enqueued,
+            "last_scan_wave_started_at": s.last_scan_wave_started_at,
+            "last_scan_wave_ended_at": s.last_scan_wave_ended_at,
+            "last_scan_wave_had_errors": s.last_scan_wave_had_errors,
             "photos_total": int(counts_cache["photos_total"]),
             "photos_indexed": int(counts_cache["photos_indexed"]),
             "roots_total": int(counts_cache["roots_total"]),
@@ -550,7 +656,7 @@ def create_app(
                     or bool(payload.get("active_scan_root_id"))
                     or bool(payload.get("active_ingest_path"))
                 )
-                await asyncio.sleep(1.0 if busy else 4.0)
+                await asyncio.sleep(status_busy_interval_s if busy else status_idle_interval_s)
 
         headers = {
             "Cache-Control": "no-cache",
@@ -562,6 +668,25 @@ def create_app(
     @app.get("/api/activity")
     def api_activity(limit: int = Query(default=30)) -> dict:
         return {"recent_ingest": indexer.recent_activity(limit=limit)}
+
+    @app.get("/api/roots")
+    def api_roots() -> dict:
+        rows = _web_fetchall("SELECT * FROM tracked_roots ORDER BY id DESC")
+        out: list[dict[str, object]] = []
+        for r in rows:
+            out.append(
+                {
+                    "id": int(r["id"]),
+                    "path": str(r["path"]),
+                    "status": str(r["status"] or ""),
+                    "last_seen_at": r["last_seen_at"],
+                    "last_scan_started_at": r["last_scan_started_at"],
+                    "last_scan_enumerated_at": r["last_scan_enumerated_at"],
+                    "last_scan_finished_at": r["last_scan_finished_at"],
+                    "last_error": r["last_error"],
+                }
+            )
+        return {"roots": out}
 
     @app.get("/roots", response_class=HTMLResponse)
     def roots_page(request: Request) -> HTMLResponse:
@@ -743,6 +868,7 @@ def create_app(
     def search_alias(
         request: Request,
         q: str = Query(default=""),
+        folder: Optional[str] = Query(default=None),
         year: Optional[str] = Query(default=None),
         month: Optional[str] = Query(default=None),
         day: Optional[str] = Query(default=None),
@@ -753,6 +879,8 @@ def create_app(
         params = []
         if q:
             params.append(("q", q))
+        if folder:
+            params.append(("folder", folder))
         if year:
             params.append(("year", year))
         if month:

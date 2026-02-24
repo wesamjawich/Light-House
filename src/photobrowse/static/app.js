@@ -8,30 +8,57 @@
     return Math.max(lo, Math.min(hi, v));
   }
 
-  const thumbCfg = { min: 140, max: 360, step: 10, default: 200 };
+  const thumbCfg = {
+    step: 10,
+    mobileBreakpoint: 980,
+    regular: { min: 140, max: 360, default: 200, storageKey: "pb_thumbSize" },
+    compact: { min: 90, max: 220, default: 110, storageKey: "pb_thumbSize_mobile" },
+  };
   let currentThumbSize = null;
+  let currentThumbMode = null;
+
+  function isCompactViewport() {
+    try {
+      return window.matchMedia(`(max-width: ${thumbCfg.mobileBreakpoint}px)`).matches;
+    } catch (_) {
+      return window.innerWidth <= thumbCfg.mobileBreakpoint;
+    }
+  }
+
+  function getThumbMode() {
+    return isCompactViewport() ? "compact" : "regular";
+  }
+
+  function getThumbProfile() {
+    const mode = getThumbMode();
+    if (currentThumbMode && currentThumbMode !== mode) currentThumbSize = null;
+    currentThumbMode = mode;
+    return thumbCfg[mode];
+  }
 
   function getThumbSize() {
     if (typeof currentThumbSize === "number") return currentThumbSize;
-    let v = thumbCfg.default;
+    const profile = getThumbProfile();
+    let v = profile.default;
     try {
-      const saved = Number(localStorage.getItem("pb_thumbSize"));
+      const saved = Number(localStorage.getItem(profile.storageKey));
       if (saved && !Number.isNaN(saved)) v = saved;
     } catch (_) {}
     v = Math.round(v / thumbCfg.step) * thumbCfg.step;
-    v = clamp(v, thumbCfg.min, thumbCfg.max);
+    v = clamp(v, profile.min, profile.max);
     currentThumbSize = v;
     return v;
   }
 
   function setThumbSize(px) {
-    const v = clamp(Math.round(px / thumbCfg.step) * thumbCfg.step, thumbCfg.min, thumbCfg.max);
+    const profile = getThumbProfile();
+    const v = clamp(Math.round(px / thumbCfg.step) * thumbCfg.step, profile.min, profile.max);
     currentThumbSize = v;
     root.style.setProperty("--thumbSize", `${v}px`);
     const label = qs("[data-zoom-label]");
     if (label) label.textContent = `${v}px`;
     try {
-      localStorage.setItem("pb_thumbSize", String(v));
+      localStorage.setItem(profile.storageKey, String(v));
     } catch (_) {}
     try {
       window.dispatchEvent(new CustomEvent("pb:thumbsize", { detail: { px: v } }));
@@ -42,6 +69,18 @@
 
   function initZoomControls() {
     setThumbSize(getThumbSize());
+    let prevMode = currentThumbMode || getThumbMode();
+    window.addEventListener(
+      "resize",
+      () => {
+        const nextMode = getThumbMode();
+        if (nextMode === prevMode) return;
+        prevMode = nextMode;
+        currentThumbSize = null;
+        setThumbSize(getThumbSize());
+      },
+      { passive: true },
+    );
   }
 
   function toast(msg) {
@@ -88,6 +127,7 @@
     const stage = qs("[data-viewer-stage]", viewer);
     const caption = qs("[data-viewer-caption]", viewer);
     const openOriginal = qs("[data-viewer-open]", viewer);
+    const openFolder = qs("[data-viewer-folder]", viewer);
 
     const btnClose = qs("[data-viewer-close]", viewer);
     const btnZoomIn = qs("[data-viewer-zoom-in]", viewer);
@@ -147,10 +187,26 @@
     function setCaptionAndLink(tile) {
       const title = tile.getAttribute("data-caption") || "";
       const full = tile.getAttribute("data-full") || "";
+      const absPath = tile.getAttribute("data-path") || "";
       currentCaption = title;
       currentSrc = full;
       caption.textContent = title;
       openOriginal.setAttribute("href", full);
+      const slash = Math.max(absPath.lastIndexOf("/"), absPath.lastIndexOf("\\"));
+      const folder = slash > 0 ? absPath.slice(0, slash) : "";
+      if (openFolder) {
+        if (folder) {
+          openFolder.setAttribute("href", `/?folder=${encodeURIComponent(folder)}`);
+          openFolder.removeAttribute("aria-disabled");
+          openFolder.style.pointerEvents = "";
+          openFolder.style.opacity = "";
+        } else {
+          openFolder.setAttribute("href", "#");
+          openFolder.setAttribute("aria-disabled", "true");
+          openFolder.style.pointerEvents = "none";
+          openFolder.style.opacity = "0.5";
+        }
+      }
     }
 
     function closeViewer({ animate = true } = {}) {
@@ -165,9 +221,18 @@
       currentCaption = "";
       openToken += 1;
       animDone = false;
+      dragging = false;
+      dragStart = null;
+      if (photoImg) photoImg.classList.remove("dragging");
       if (photoEl) photoEl.remove();
       photoEl = null;
       photoImg = null;
+      if (openFolder) {
+        openFolder.setAttribute("href", "#");
+        openFolder.setAttribute("aria-disabled", "true");
+        openFolder.style.pointerEvents = "none";
+        openFolder.style.opacity = "0.5";
+      }
       resetTransform();
     }
 
@@ -182,8 +247,7 @@
       currentCaption = title;
       currentIndex = tiles.indexOf(tile);
 
-      caption.textContent = title;
-      openOriginal.setAttribute("href", full);
+      setCaptionAndLink(tile);
 
       ensurePhotoEl();
       resetTransform();
@@ -391,10 +455,11 @@
     btnZoomOut?.addEventListener("click", () => zoomAt(1 / 1.2, window.innerWidth / 2, window.innerHeight / 2));
     btnReset?.addEventListener("click", () => resetTransform());
 
-    stage?.addEventListener(
+    viewer?.addEventListener(
       "wheel",
       (e) => {
         if (!viewer.classList.contains("open")) return;
+        if (photoEl && e.target instanceof Node && !photoEl.contains(e.target) && e.target !== stage) return;
         e.preventDefault();
         const delta = e.deltaY > 0 ? 1 / 1.12 : 1.12;
         zoomAt(delta, e.clientX, e.clientY);
@@ -404,33 +469,42 @@
     );
 
     // Pan.
-    stage?.addEventListener("pointerdown", (e) => {
+    const beginPan = (e) => {
+      if (!viewer.classList.contains("open")) return;
       if (s <= 1) return;
+      if (!photoEl) return;
+      if (!(e.target instanceof Node)) return;
+      if (!photoEl.contains(e.target)) return;
+      e.preventDefault();
       dragging = true;
       if (photoImg) photoImg.classList.add("dragging");
-      stage.setPointerCapture(e.pointerId);
+      try {
+        viewer.setPointerCapture(e.pointerId);
+      } catch (_) {
+        // ignore
+      }
       dragStart = { x: e.clientX, y: e.clientY, tx, ty };
-    });
-    stage?.addEventListener("pointermove", (e) => {
+    };
+    const movePan = (e) => {
       if (!dragging || !dragStart) return;
       tx = dragStart.tx + (e.clientX - dragStart.x);
       ty = dragStart.ty + (e.clientY - dragStart.y);
       applyTransform();
-    });
-    stage?.addEventListener("pointerup", () => {
+    };
+    const endPan = () => {
       dragging = false;
       if (photoImg) photoImg.classList.remove("dragging");
       dragStart = null;
-    });
-    stage?.addEventListener("pointercancel", () => {
-      dragging = false;
-      if (photoImg) photoImg.classList.remove("dragging");
-      dragStart = null;
-    });
+    };
+    viewer?.addEventListener("pointerdown", beginPan);
+    window.addEventListener("pointermove", movePan);
+    window.addEventListener("pointerup", endPan);
+    window.addEventListener("pointercancel", endPan);
 
     // Double click to zoom.
-    stage?.addEventListener("dblclick", (e) => {
+    viewer?.addEventListener("dblclick", (e) => {
       if (!viewer.classList.contains("open")) return;
+      if (photoEl && e.target instanceof Node && !photoEl.contains(e.target)) return;
       if (s <= 1) zoomAt(2.2, e.clientX, e.clientY);
       else resetTransform();
     });
@@ -441,18 +515,21 @@
     initRelevantSections();
     const thumbCtl = initThumbLoading();
     const statusCtl = initStatus();
+    const rootsCtl = initRootsLive();
     const searchForm = qs("form.searchbar");
     searchForm?.addEventListener("submit", () => {
       // Free up the browser's per-origin connection pool so the next navigation isn't
       // blocked behind thumbnail/SSE requests.
       thumbCtl?.cancel?.();
       statusCtl?.shutdown?.();
+      rootsCtl?.shutdown?.();
     });
     window.addEventListener(
       "pagehide",
       () => {
         thumbCtl?.cancel?.();
         statusCtl?.shutdown?.();
+        rootsCtl?.shutdown?.();
       },
       { once: true },
     );
@@ -728,6 +805,17 @@
       spinner?.classList.toggle("on", busy);
       dot?.classList.toggle("live", true);
       el.classList.toggle("busy", busy);
+      const failedTotal = Number(s.failed_total || 0);
+      const hasFailure = failedTotal > 0 && !!(s.last_failed_path || s.last_failed_error);
+      const nowTs = Number(s.now || 0);
+      const lastWaveEnded = Number(s.last_scan_wave_ended_at || 0);
+      const lastWaveFound = Number(s.last_scan_wave_found || 0);
+      const lastWaveRoots = Math.max(1, Number(s.last_scan_wave_roots || 0));
+      const lastWaveHadErrors = !!s.last_scan_wave_had_errors;
+      const lastWaveAgeSec = lastWaveEnded > 0 && nowTs > 0 ? Math.max(0, Math.round(nowTs - lastWaveEnded)) : null;
+      const showSummary = !busy && !hasFailure && lastWaveEnded > 0 && (lastWaveAgeSec == null || lastWaveAgeSec <= 180);
+      el.classList.toggle("has-failure", hasFailure);
+      el.classList.toggle("has-summary", showSummary);
 
       const scan = s.active_scan_root_path ? `Scanning ${s.active_scan_root_path}` : `Scan queue ${s.scan_queue_size}`;
       const indexing = s.active_ingest_path
@@ -736,16 +824,29 @@
       const titleParts = [
         `${s.photos_total} photos`,
         `${s.photos_indexed || 0} indexed`,
+        hasFailure ? `${failedTotal} failed` : "",
         `${s.roots_online}/${s.roots_total} roots online`,
         busy ? scan : "Idle",
         busy ? indexing : "",
+        showSummary ? `Last scan: ${lastWaveFound} files across ${lastWaveRoots} root${lastWaveRoots === 1 ? "" : "s"}` : "",
+        showSummary && lastWaveAgeSec != null ? `${lastWaveAgeSec}s ago` : "",
+        showSummary && lastWaveHadErrors ? "with warnings" : "",
+        hasFailure ? (s.last_failed_error || "Last failure recorded") : "",
       ].filter(Boolean);
       el.setAttribute("title", titleParts.join(" • "));
       if (text) {
         const denom = Math.max(0, Number(s.active_scan_enqueued || 0));
         const num = Math.max(0, Number(s.active_scan_processed || 0));
         const pct = denom > 0 ? Math.min(100, Math.round((num / denom) * 100)) : null;
-        text.textContent = busy ? (pct != null ? `Indexing ${pct}%` : "Indexing…") : "";
+        if (busy) {
+          text.textContent = pct != null ? `Indexing ${pct}%` : "Indexing…";
+        } else if (hasFailure) {
+          text.textContent = "Failure (Diagnostics)";
+        } else if (showSummary) {
+          text.textContent = `Scan complete (${lastWaveFound} / ${lastWaveRoots} root${lastWaveRoots === 1 ? "" : "s"})`;
+        } else {
+          text.textContent = "";
+        }
       }
 
       if (diagActivity) {
@@ -771,10 +872,18 @@
 
         const scanning = !!s.active_scan_root_id;
         const indexingNow = !!s.active_ingest_path || (s.ingest_queue_size || 0) > 0;
-        const state = scanning && indexingNow ? "Scanning + indexing" : scanning ? "Scanning" : indexingNow ? "Indexing" : "Idle";
+        const state = scanning && indexingNow
+          ? "Scanning + indexing"
+          : scanning
+            ? "Scanning"
+            : indexingNow
+              ? "Indexing"
+              : showSummary
+                ? `Idle • last scan ${lastWaveFound} file${lastWaveFound === 1 ? "" : "s"} across ${lastWaveRoots} root${lastWaveRoots === 1 ? "" : "s"}`
+                : "Idle";
         if (stateEl) stateEl.textContent = state;
 
-        if (rootEl) rootEl.textContent = s.active_scan_root_path || "—";
+        if (rootEl) rootEl.textContent = s.active_scan_root_path || s.last_scan_root_path || "—";
         if (curEl) curEl.textContent = s.active_ingest_path || "—";
         if (photosTotalEl) photosTotalEl.textContent = String(Number(s.photos_total || 0));
         if (photosIndexedEl) photosIndexedEl.textContent = String(Number(s.photos_indexed || 0));
@@ -795,7 +904,6 @@
           progress.value = Math.max(0, Math.min(num, max));
         }
 
-        const failedTotal = Number(s.failed_total || 0);
         if (failedPill) failedPill.hidden = failedTotal <= 0;
         if (failedCountEl) failedCountEl.textContent = String(failedTotal);
 
@@ -814,6 +922,11 @@
         if (kPhotos) kPhotos.textContent = String(Number(s.photos_total || 0));
         if (kIndexed) kIndexed.textContent = String(Number(s.photos_indexed || 0));
         if (kFailed) kFailed.textContent = String(Number(s.failed_total || 0));
+      }
+      try {
+        window.dispatchEvent(new CustomEvent("pb:status", { detail: { status: s } }));
+      } catch (_) {
+        // ignore
       }
     }
 
@@ -864,5 +977,152 @@
     }
 
     return { shutdown };
+  }
+
+  function initRootsLive() {
+    const table = qs("[data-roots-table]");
+    if (!table) return { shutdown: () => {} };
+
+    let stopped = false;
+    let fallbackTimer = null;
+    let inFlight = null;
+    let lastFetchAt = 0;
+    let pendingTimer = null;
+    let activeRootId = null;
+    const transientUntilByRoot = new Map();
+    let transientTimer = null;
+
+    const setText = (row, sel, value) => {
+      const el = qs(sel, row);
+      if (!el) return;
+      el.textContent = value == null ? "" : String(value);
+    };
+
+    const applyActiveState = () => {
+      const now = Date.now();
+      let nextWake = null;
+      const rows = qsa("[data-root-row]", table);
+      for (const row of rows) {
+        const rid = Number(row.getAttribute("data-root-row"));
+        const enumEl = qs("[data-root-scan-enum]", row);
+        const finEl = qs("[data-root-scan-finished]", row);
+        const until = Number(transientUntilByRoot.get(rid) || 0);
+        const transient = until > now;
+        if (transient) {
+          if (nextWake == null || until < nextWake) nextWake = until;
+        }
+        if (rid === Number(activeRootId || 0) || transient) {
+          if (enumEl) enumEl.textContent = "Scanning…";
+          if (finEl) finEl.textContent = "In progress…";
+          row.classList.add("scan-active");
+          continue;
+        }
+        row.classList.remove("scan-active");
+        if (enumEl) enumEl.textContent = row.getAttribute("data-last-scan-enum") || "";
+        if (finEl) finEl.textContent = row.getAttribute("data-last-scan-finished") || "";
+      }
+      if (transientTimer) window.clearTimeout(transientTimer);
+      transientTimer = null;
+      if (nextWake != null) {
+        transientTimer = window.setTimeout(() => {
+          transientTimer = null;
+          applyActiveState();
+        }, Math.max(40, nextWake - Date.now() + 20));
+      }
+    };
+
+    const applyRoots = (roots) => {
+      if (!Array.isArray(roots)) return;
+      for (const r of roots) {
+        const row = qs(`[data-root-row="${Number(r.id)}"]`, table);
+        if (!row) continue;
+        setText(row, "[data-root-status]", r.status);
+        setText(row, "[data-root-last-seen]", r.last_seen_at);
+        const hadStartedAttr = row.hasAttribute("data-last-scan-started");
+        const prevStarted = row.getAttribute("data-last-scan-started") || "";
+        const nextStarted = r.last_scan_started_at == null ? "" : String(r.last_scan_started_at);
+        if (hadStartedAttr && nextStarted && nextStarted !== prevStarted) {
+          transientUntilByRoot.set(Number(r.id), Date.now() + 1400);
+        }
+        row.setAttribute("data-last-scan-started", nextStarted);
+        row.setAttribute("data-last-scan-enum", r.last_scan_enumerated_at == null ? "" : String(r.last_scan_enumerated_at));
+        row.setAttribute(
+          "data-last-scan-finished",
+          r.last_scan_finished_at == null ? "" : String(r.last_scan_finished_at),
+        );
+        setText(row, "[data-root-last-error]", r.last_error);
+      }
+      applyActiveState();
+    };
+
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        inFlight?.abort?.();
+      } catch (_) {}
+      inFlight = new AbortController();
+      lastFetchAt = Date.now();
+      try {
+        const res = await fetch("/api/roots", { cache: "no-store", signal: inFlight.signal });
+        if (!res.ok) throw new Error("bad roots status");
+        const payload = await res.json();
+        applyRoots(payload.roots || []);
+      } catch (_) {
+        // Keep silent; next poll will retry.
+      }
+    };
+
+    const schedulePoll = (delayMs = 0) => {
+      if (stopped) return;
+      if (pendingTimer) return;
+      pendingTimer = window.setTimeout(async () => {
+        pendingTimer = null;
+        await poll();
+      }, Math.max(0, delayMs));
+    };
+
+    const onStatus = (ev) => {
+      if (stopped) return;
+      const s = ev?.detail?.status || {};
+      const busy =
+        (s.scan_queue_size || 0) > 0 ||
+        (s.ingest_queue_size || 0) > 0 ||
+        !!s.active_scan_root_id ||
+        !!s.active_ingest_path;
+      const nextActiveRoot = s.active_scan_root_id ? Number(s.active_scan_root_id) : null;
+      const changedRoot = nextActiveRoot !== activeRootId;
+      activeRootId = nextActiveRoot;
+      applyActiveState();
+      const age = Date.now() - lastFetchAt;
+      if (busy || age > 6000 || changedRoot) {
+        schedulePoll(0);
+      }
+    };
+
+    poll();
+    window.addEventListener("pb:status", onStatus);
+    // Fallback in case status stream disconnects.
+    fallbackTimer = window.setInterval(() => {
+      const age = Date.now() - lastFetchAt;
+      if (age > 10000) schedulePoll(0);
+    }, 5000);
+
+    return {
+      shutdown: () => {
+        if (stopped) return;
+        stopped = true;
+        window.removeEventListener("pb:status", onStatus);
+        if (fallbackTimer) window.clearInterval(fallbackTimer);
+        fallbackTimer = null;
+        if (pendingTimer) window.clearTimeout(pendingTimer);
+        pendingTimer = null;
+        if (transientTimer) window.clearTimeout(transientTimer);
+        transientTimer = null;
+        try {
+          inFlight?.abort?.();
+        } catch (_) {}
+        inFlight = null;
+      },
+    };
   }
 })();

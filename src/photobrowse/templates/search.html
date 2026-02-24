@@ -23,6 +23,9 @@
             {# Semantic searches can return a lot of results; keep the default page size smaller for responsiveness. #}
             {% set limit_for_form = 160 if q.strip() else limit %}
             <input type="hidden" name="limit" value="{{ limit_for_form }}" />
+            {% if folder %}
+              <input type="hidden" name="folder" value="{{ folder }}" />
+            {% endif %}
             <span class="searchbar-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" width="20" height="20">
                 <path fill="currentColor" d="M10 4a6 6 0 104.472 10.03l3.749 3.75a1 1 0 001.415-1.415l-3.75-3.749A6 6 0 0010 4zm-4 6a4 4 0 118 0 4 4 0 01-8 0z"/>
@@ -68,10 +71,13 @@
 
     <div class="container">
       <div class="hint">
+        {% if folder %}
+          Folder view: <code>{{ folder }}</code>. <a href="/">Back to all photos</a><br />
+        {% endif %}
         {% if q.strip() %}
-          Semantic results for “{{ q }}”. (Esc closes viewer; scroll zooms; drag pans)
+          Semantic + path/name matches for “{{ q }}”. (Esc closes viewer; scroll zooms; drag pans)
         {% else %}
-          All photos by date. Add a query for semantic search.
+          Daily shuffled library (changes each day). Add a query for semantic search.
         {% endif %}
         {% if total_matches is not none %}
           <span style="margin-left:10px;">Showing {{ offset + 1 }}–{{ offset + rows|length }} of {{ total_matches }}.</span>
@@ -99,6 +105,7 @@
                   data-tile
                   data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
                   data-caption="{{ r['rel_path'] }}"
+                  data-path="{{ r['path'] }}"
                 >
                   <img
                     src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
@@ -139,6 +146,7 @@
                     data-tile
                     data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
                     data-caption="{{ r['rel_path'] }}"
+                    data-path="{{ r['path'] }}"
                   >
                     <img
                       src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
@@ -181,6 +189,7 @@
                 data-tile
                 data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
                 data-caption="{{ r['rel_path'] }}"
+                data-path="{{ r['path'] }}"
               >
                 <img
                   src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
@@ -206,6 +215,7 @@
       {% if has_more %}
         <form action="/" method="get" style="margin-top: 18px; display:flex; justify-content:center;">
           <input type="hidden" name="q" value="{{ q }}" />
+          <input type="hidden" name="folder" value="{{ folder }}" />
           <input type="hidden" name="year" value="{{ year }}" />
           <input type="hidden" name="month" value="{{ month }}" />
           <input type="hidden" name="day" value="{{ day }}" />
@@ -227,6 +237,7 @@
           <button class="viewer-btn" type="button" data-viewer-zoom-out>−</button>
           <button class="viewer-btn" type="button" data-viewer-reset>Reset</button>
           <button class="viewer-btn" type="button" data-viewer-zoom-in>+</button>
+          <a class="viewer-btn" data-viewer-folder>Folder</a>
           <a class="viewer-btn" data-viewer-open target="_blank" rel="noopener">Open</a>
         </div>
       </div>
