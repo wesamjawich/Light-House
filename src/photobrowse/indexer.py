@@ -55,6 +55,20 @@ class IndexerStats:
     last_failed_path: Optional[str]
     last_failed_at: Optional[float]
     last_failed_error: Optional[str]
+    last_scan_root_id: Optional[int]
+    last_scan_root_path: Optional[str]
+    last_scan_found: int
+    last_scan_enqueued: int
+    last_scan_processed: int
+    last_scan_started_at: Optional[float]
+    last_scan_ended_at: Optional[float]
+    last_scan_had_errors: bool
+    last_scan_wave_roots: int
+    last_scan_wave_found: int
+    last_scan_wave_enqueued: int
+    last_scan_wave_started_at: Optional[float]
+    last_scan_wave_ended_at: Optional[float]
+    last_scan_wave_had_errors: bool
 
 
 class PhotoIndexer:
@@ -96,6 +110,19 @@ class PhotoIndexer:
         self._last_root_error_at: dict[int, float] = {}
         self._failed_total = 0
         self._last_failed: Optional[dict[str, object]] = None
+        self._last_scan_summary: Optional[dict[str, object]] = None
+        self._scan_wave: Optional[dict[str, object]] = None
+        self._last_scan_wave_summary: Optional[dict[str, object]] = None
+
+    def _record_failure(self, *, root_id: int, path: Path, error: str) -> None:
+        with self._stats_lock:
+            self._failed_total += 1
+            self._last_failed = {
+                "ts": time.time(),
+                "path": str(path),
+                "root_id": int(root_id),
+                "error": error,
+            }
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._db_local, "conn", None)
@@ -191,6 +218,8 @@ class PhotoIndexer:
             scan_prog = self._scan_progress.get(int(focus_root_id), {}) if focus_root_id is not None else {}
             focus_root_path = scan.root_path if scan else (ingest.root_path if ingest else None)
             last_failed = self._last_failed or {}
+            last_scan = self._last_scan_summary or {}
+            last_wave = self._last_scan_wave_summary or {}
             return IndexerStats(
                 scan_queue_size=int(self._scan_q.qsize()),
                 ingest_queue_size=int(self._q.qsize()),
@@ -209,6 +238,20 @@ class PhotoIndexer:
                 last_failed_path=str(last_failed.get("path")) if last_failed.get("path") else None,
                 last_failed_at=float(last_failed.get("ts")) if last_failed.get("ts") else None,
                 last_failed_error=str(last_failed.get("error")) if last_failed.get("error") else None,
+                last_scan_root_id=int(last_scan["root_id"]) if last_scan.get("root_id") is not None else None,
+                last_scan_root_path=str(last_scan.get("root_path")) if last_scan.get("root_path") else None,
+                last_scan_found=int(last_scan.get("found", 0) or 0),
+                last_scan_enqueued=int(last_scan.get("enqueued", 0) or 0),
+                last_scan_processed=int(last_scan.get("processed", 0) or 0),
+                last_scan_started_at=float(last_scan.get("started_at")) if last_scan.get("started_at") else None,
+                last_scan_ended_at=float(last_scan.get("ended_at")) if last_scan.get("ended_at") else None,
+                last_scan_had_errors=bool(last_scan.get("had_errors")),
+                last_scan_wave_roots=int(last_wave.get("roots", 0) or 0),
+                last_scan_wave_found=int(last_wave.get("found", 0) or 0),
+                last_scan_wave_enqueued=int(last_wave.get("enqueued", 0) or 0),
+                last_scan_wave_started_at=float(last_wave.get("started_at")) if last_wave.get("started_at") else None,
+                last_scan_wave_ended_at=float(last_wave.get("ended_at")) if last_wave.get("ended_at") else None,
+                last_scan_wave_had_errors=bool(last_wave.get("had_errors")),
             )
 
     def recent_activity(self, limit: int = 50) -> list[dict[str, object]]:
@@ -235,13 +278,22 @@ class PhotoIndexer:
                         "scan_done": False,
                         "had_errors": False,
                     }
+                    if self._scan_wave is None:
+                        self._scan_wave = {
+                            "started_at": time.time(),
+                            "roots": set(),
+                            "found": 0,
+                            "enqueued": 0,
+                            "had_errors": False,
+                        }
+                    roots = self._scan_wave.get("roots")
+                    if isinstance(roots, set):
+                        roots.add(int(task.root_id))
                 with tx(conn):
                     conn.execute(
                         """
                         UPDATE tracked_roots
                         SET last_scan_started_at=datetime('now'),
-                            last_scan_enumerated_at=NULL,
-                            last_scan_finished_at=NULL,
                             last_error=NULL
                         WHERE id=?
                         """,
@@ -251,15 +303,44 @@ class PhotoIndexer:
                     raise OSError(f"Root path unavailable: {task.root_path}")
 
                 def _on_scan_error(err: OSError) -> None:
-                    # os.walk calls this on directory access failures; abort so we don't
-                    # incorrectly mark the scan as "finished" when the drive disappears.
-                    msg = str(err)
-                    with tx(conn):
-                        conn.execute(
-                            "UPDATE tracked_roots SET status='offline', last_error=? WHERE id=?",
-                            (msg, task.root_id),
-                        )
-                    raise err
+                    # os.walk calls this on directory access failures.
+                    # Keep scanning other directories/files even if one path is bad.
+                    # We still mark this scan as having errors and surface the failure.
+                    bad_path = Path(str(getattr(err, "filename", "") or task.root_path))
+                    err_name = type(err).__name__
+                    msg = f"Scan path error ({err_name}): {bad_path} ({err})"
+                    logger.warning(msg)
+                    with self._stats_lock:
+                        prog = self._scan_progress.get(task.root_id)
+                        if prog is not None:
+                            prog["had_errors"] = True
+                        if self._scan_wave is not None:
+                            self._scan_wave["had_errors"] = True
+                    self._record_failure(root_id=task.root_id, path=bad_path, error=msg)
+                    now = time.time()
+                    last = float(self._last_root_error_at.get(task.root_id, 0.0) or 0.0)
+                    if now - last > 2.0:
+                        self._last_root_error_at[task.root_id] = now
+                        try:
+                            root_missing = False
+                            try:
+                                root_missing = not task.root_path.exists()
+                            except Exception:
+                                root_missing = True
+                            with tx(conn):
+                                if root_missing:
+                                    conn.execute(
+                                        "UPDATE tracked_roots SET status='offline', last_error=? WHERE id=?",
+                                        (msg, task.root_id),
+                                    )
+                                else:
+                                    conn.execute(
+                                        "UPDATE tracked_roots SET last_error=? WHERE id=?",
+                                        (msg, task.root_id),
+                                    )
+                        except Exception:
+                            pass
+                    return
 
                 for img_path in iter_images_recursive(task.root_path, on_error=_on_scan_error):
                     with self._stats_lock:
@@ -267,6 +348,8 @@ class PhotoIndexer:
                         if prog is not None:
                             prog["current_path"] = str(img_path)
                             prog["found"] = int(prog.get("found", 0) or 0) + 1
+                        if self._scan_wave is not None:
+                            self._scan_wave["found"] = int(self._scan_wave.get("found", 0) or 0) + 1
                     self.enqueue(
                         IndexTask(photo_path=img_path, root_id=task.root_id, root_path=task.root_path)
                     )
@@ -274,6 +357,8 @@ class PhotoIndexer:
                         prog = self._scan_progress.get(task.root_id)
                         if prog is not None:
                             prog["enqueued"] = int(prog.get("enqueued", 0) or 0) + 1
+                        if self._scan_wave is not None:
+                            self._scan_wave["enqueued"] = int(self._scan_wave.get("enqueued", 0) or 0) + 1
                 with tx(conn):
                     conn.execute(
                         "UPDATE tracked_roots SET last_scan_enumerated_at=datetime('now') WHERE id=?",
@@ -284,26 +369,69 @@ class PhotoIndexer:
                     if prog is not None:
                         prog["scan_done"] = True
                 self._maybe_mark_scan_finished(task.root_id)
-            except Exception:
+            except Exception as e:
                 logger.exception("Scan failed for root_id=%s path=%s", task.root_id, task.root_path)
+                failed_path = task.root_path
                 with self._stats_lock:
                     prog = self._scan_progress.get(task.root_id)
                     if prog is not None:
                         prog["had_errors"] = True
+                        cur = str(prog.get("current_path") or "").strip()
+                        if cur:
+                            failed_path = Path(cur)
+                    if self._scan_wave is not None:
+                        self._scan_wave["had_errors"] = True
+                err_name = type(e).__name__
+                err_msg = f"Scan failed ({err_name}): {e}"
+                self._record_failure(root_id=task.root_id, path=failed_path, error=err_msg)
                 try:
+                    root_missing = False
+                    try:
+                        root_missing = not task.root_path.exists()
+                    except Exception:
+                        root_missing = True
                     with tx(conn):
-                        conn.execute(
-                            "UPDATE tracked_roots SET last_error=? WHERE id=?",
-                            (f"Scan failed: {task.root_path}", task.root_id),
-                        )
+                        if root_missing:
+                            conn.execute(
+                                "UPDATE tracked_roots SET status='offline', last_error=? WHERE id=?",
+                                (err_msg, task.root_id),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE tracked_roots SET last_error=? WHERE id=?",
+                                (err_msg, task.root_id),
+                            )
                 except Exception:
                     pass
             finally:
                 with self._stats_lock:
                     prog = self._scan_progress.get(task.root_id)
                     if prog is not None:
+                        self._last_scan_summary = {
+                            "root_id": int(task.root_id),
+                            "root_path": str(task.root_path),
+                            "found": int(prog.get("found", 0) or 0),
+                            "enqueued": int(prog.get("enqueued", 0) or 0),
+                            "processed": int(prog.get("processed", 0) or 0),
+                            "started_at": float(prog.get("started_at") or 0.0) or None,
+                            "ended_at": time.time(),
+                            "had_errors": bool(prog.get("had_errors")),
+                        }
                         prog["current_path"] = None
                     self._active_scan = None
+                    if self._scan_q.qsize() == 0 and self._scan_wave is not None:
+                        wave = self._scan_wave
+                        roots = wave.get("roots")
+                        roots_count = len(roots) if isinstance(roots, set) else 0
+                        self._last_scan_wave_summary = {
+                            "roots": int(roots_count),
+                            "found": int(wave.get("found", 0) or 0),
+                            "enqueued": int(wave.get("enqueued", 0) or 0),
+                            "started_at": float(wave.get("started_at") or 0.0) or None,
+                            "ended_at": time.time(),
+                            "had_errors": bool(wave.get("had_errors")),
+                        }
+                        self._scan_wave = None
                 self._scan_q.task_done()
 
     def _maybe_mark_scan_finished(self, root_id: int) -> None:
@@ -362,13 +490,8 @@ class PhotoIndexer:
                     prog = self._scan_progress.get(task.root_id)
                     if prog is not None:
                         prog["had_errors"] = True
-                    self._failed_total += 1
-                    self._last_failed = {
-                        "ts": time.time(),
-                        "path": str(task.photo_path),
-                        "root_id": int(task.root_id),
-                        "error": str(e),
-                    }
+                err_msg = f"Ingest failed ({type(e).__name__}): {e}"
+                self._record_failure(root_id=task.root_id, path=task.photo_path, error=err_msg)
                 now = time.time()
                 last = float(self._last_root_error_at.get(task.root_id, 0.0) or 0.0)
                 if now - last > 2.0:
@@ -377,7 +500,7 @@ class PhotoIndexer:
                         with tx(conn):
                             conn.execute(
                                 "UPDATE tracked_roots SET last_error=? WHERE id=?",
-                                (f"Ingest failed: {task.photo_path}", task.root_id),
+                                (err_msg, task.root_id),
                             )
                     except Exception:
                         pass
@@ -429,7 +552,18 @@ class PhotoIndexer:
         needs_embedding = False
         model_id = embedder.model_id if embedder else None
         if embedder and vector_index and photo_id is not None and model_id:
-            needs_embedding = not (existing and str(existing["embedding_model"] or "") == model_id)
+            has_model_embedding = bool(existing and str(existing["embedding_model"] or "") == model_id)
+            needs_embedding = not has_model_embedding
+            # Repair case: DB says embedding exists, but vector label is missing
+            # (e.g., partial/corrupt index state from a prior failure).
+            if has_model_embedding:
+                try:
+                    has_label = getattr(vector_index, "has_label", None)
+                    if callable(has_label) and not bool(has_label(photo_id)):
+                        needs_embedding = True
+                except Exception:
+                    # If the vector backend can't answer presence checks, keep prior behavior.
+                    pass
 
         # If the on-disk thumbnail was deleted, treat it as needing work even if the source file is unchanged.
         needs_thumb = False

@@ -34,6 +34,9 @@ class VectorIndex:
 
         self._meta_path = self.index_dir / "meta.json"
         self._bin_path = self.index_dir / "hnsw.bin"
+        # Best-effort in-memory label presence map. When unavailable on a given
+        # hnswlib build, we treat presence checks as unknown (and skip strict checks).
+        self._labels_present: Optional[set[int]] = None
 
     def _default_max_elements(self) -> int:
         # Keep this reasonably high; HNSW needs a fixed capacity, but can be resized later.
@@ -100,6 +103,13 @@ class VectorIndex:
             index.set_ef(64)
             self._index = index
             self._loaded = True
+            labels: Optional[set[int]] = None
+            try:
+                if hasattr(index, "get_ids_list"):
+                    labels = {int(x) for x in index.get_ids_list()}
+            except Exception:
+                labels = None
+            self._labels_present = labels
             self._persist_meta()
 
     def _persist_meta(self) -> None:
@@ -153,6 +163,8 @@ class VectorIndex:
                     self._index.add_items(vec2, [label])
                 else:
                     raise
+            if self._labels_present is not None:
+                self._labels_present.add(int(label))
 
     def delete(self, label: int) -> None:
         """
@@ -166,6 +178,8 @@ class VectorIndex:
                 self._index.mark_deleted(int(label))
             except Exception:
                 pass
+            if self._labels_present is not None:
+                self._labels_present.discard(int(label))
 
     def delete_many(self, labels: Iterable[int]) -> None:
         """
@@ -180,6 +194,8 @@ class VectorIndex:
                     self._index.mark_deleted(int(lbl))
                 except Exception:
                     continue
+                if self._labels_present is not None:
+                    self._labels_present.discard(int(lbl))
 
     def add_many(self, labels: Iterable[int], vectors) -> None:
         self._ensure_loaded()
@@ -200,6 +216,19 @@ class VectorIndex:
                     self._index.add_items(vec2, label_list)
                 else:
                     raise
+            if self._labels_present is not None:
+                self._labels_present.update(int(x) for x in label_list)
+
+    def has_label(self, label: int) -> bool:
+        """
+        Best-effort existence check for a label in the vector index.
+        Returns True when label tracking is unavailable on this hnswlib build.
+        """
+        self._ensure_loaded()
+        with self._lock:
+            if self._labels_present is None:
+                return True
+            return int(label) in self._labels_present
 
     def search(self, vector, *, k: int = 50) -> list[tuple[int, float]]:
         self._ensure_loaded()

@@ -149,6 +149,17 @@ a:hover{ text-decoration: underline; }
 .status-mini.busy .status-mini-text{
   display: block;
 }
+.status-mini.has-failure .status-mini-text{
+  display: block;
+  color: #ff8a80;
+}
+.status-mini.has-failure{
+  border-color: color-mix(in oklab, #ff8a80 24%, var(--border));
+  background: color-mix(in oklab, #ff8a80 8%, var(--panel));
+}
+.status-mini.has-summary .status-mini-text{
+  display: block;
+}
 .dot{
   width: 10px;
   height: 10px;

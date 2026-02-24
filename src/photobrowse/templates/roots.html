@@ -58,7 +58,7 @@
         <button type="submit">Scan all now</button>
       </form>
 
-      <table>
+      <table data-roots-table>
         <thead>
           <tr>
             <th>ID</th>
@@ -73,14 +73,14 @@
         </thead>
         <tbody>
         {% for r in roots %}
-          <tr>
+          <tr data-root-row="{{ r['id'] }}">
             <td>{{ r["id"] }}</td>
             <td><code>{{ r["path"] }}</code></td>
-            <td>{{ r["status"] }}</td>
-            <td class="muted">{{ r["last_seen_at"] or "" }}</td>
-            <td class="muted">{{ r["last_scan_enumerated_at"] or "" }}</td>
-            <td class="muted">{{ r["last_scan_finished_at"] or "" }}</td>
-            <td class="muted">{{ r["last_error"] or "" }}</td>
+            <td data-root-status>{{ r["status"] }}</td>
+            <td class="muted" data-root-last-seen>{{ r["last_seen_at"] or "" }}</td>
+            <td class="muted" data-root-scan-enum>{{ r["last_scan_enumerated_at"] or "" }}</td>
+            <td class="muted" data-root-scan-finished>{{ r["last_scan_finished_at"] or "" }}</td>
+            <td class="muted" data-root-last-error>{{ r["last_error"] or "" }}</td>
             <td>
               <form action="/roots/{{ r['id'] }}/remove" method="post" onsubmit="return confirm('Stop tracking this root?');">
                 <button type="submit">Remove</button>
