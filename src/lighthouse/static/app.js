@@ -320,6 +320,7 @@
       }
 
       // Load full-res in the background and "snap" swap once ready (no visible animation).
+      // Swap in the preloaded <img> element itself so we do not trigger a second request.
       let fullReady = false;
       let fullOk = false;
       const fullLoader = new Image();
@@ -351,7 +352,16 @@
           // Snap to full-res.
           if (!isCurrent()) return;
           if (photoImg.dataset.wantFull !== full) return;
-          photoImg.src = full;
+
+          const prevImg = photoImg;
+          fullLoader.dataset.wantFull = full;
+          fullLoader.style.objectFit = "contain";
+          fullLoader.style.opacity = "1";
+          fullLoader.classList.toggle("dragging", prevImg.classList.contains("dragging"));
+          fullLoader.addEventListener("dragstart", (e) => e.preventDefault());
+          photoEl.replaceChild(fullLoader, prevImg);
+          photoImg = fullLoader;
+          applyTransform();
         };
         maybeSwap();
       })();

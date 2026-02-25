@@ -853,7 +853,7 @@ def create_app(
         )
 
     @app.get("/image/{photo_id}")
-    def image(photo_id: int):
+    def image(request: Request, photo_id: int):
         row = _web_fetchone("SELECT path FROM photos WHERE id=?", (photo_id,))
         if not row:
             raise HTTPException(status_code=404)
@@ -862,7 +862,9 @@ def create_app(
             raise HTTPException(status_code=404)
         # Serve original bytes (browser handles jpeg/png).
         media_type = "image/jpeg" if p.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
-        return FileResponse(p, media_type=media_type, headers={"Cache-Control": "no-store"})
+        has_version = bool(request.query_params.get("v"))
+        cache_control = "public, max-age=31536000, immutable" if has_version else "public, max-age=0, must-revalidate"
+        return FileResponse(p, media_type=media_type, headers={"Cache-Control": cache_control})
 
     @app.get("/search")
     def search_alias(
