@@ -13,5 +13,5 @@ fi
 # shellcheck disable=SC1091
 source ".venv/bin/activate"
 
-exec photobrowse serve --host 127.0.0.1 --port 8787 "$@"
+exec lighthouse serve --host 127.0.0.1 --port 8787 "$@"
 

@@ -13,7 +13,7 @@ def pick_directory(*, title: str = "Select a folder") -> Optional[Path]:
 
     Returns a Path or None if the user cancelled / unsupported.
     """
-    if os.environ.get("PHOTOBROWSE_NO_GUI") == "1":
+    if os.environ.get("LIGHTHOUSE_NO_GUI") == "1":
         return None
 
     # macOS: prefer AppleScript (reliable, no extra deps).

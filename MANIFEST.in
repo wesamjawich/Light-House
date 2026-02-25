@@ -1,2 +1,2 @@
-recursive-include src/photobrowse/templates *.html
-recursive-include src/photobrowse/static *.css *.js
+recursive-include src/lighthouse/templates *.html
+recursive-include src/lighthouse/static *.css *.js

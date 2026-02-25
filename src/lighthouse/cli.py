@@ -59,7 +59,7 @@ def track(path: Path) -> None:
             (str(p),),
         )
     typer.echo(f"Tracking: {p}")
-    typer.echo("Start the server and press 'Scan all now' on /roots to index, or run: photobrowse serve")
+    typer.echo("Start the server and press 'Scan all now' on /roots to index, or run: lighthouse serve")
 
 
 @app.command()

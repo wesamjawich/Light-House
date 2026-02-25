@@ -91,13 +91,13 @@ class PhotoIndexer:
         self._db_conns_lock = threading.Lock()
         self._db_conns: list[sqlite3.Connection] = []
 
-        ingest_max = int(os.environ.get("PHOTOBROWSE_INGEST_QUEUE_MAX", "3000"))
-        scan_max = int(os.environ.get("PHOTOBROWSE_SCAN_QUEUE_MAX", "32"))
+        ingest_max = int(os.environ.get("LIGHTHOUSE_INGEST_QUEUE_MAX", "3000"))
+        scan_max = int(os.environ.get("LIGHTHOUSE_SCAN_QUEUE_MAX", "32"))
         self._q: queue.Queue[IndexTask] = queue.Queue(maxsize=max(1, ingest_max))
         self._scan_q: queue.Queue[ScanTask] = queue.Queue(maxsize=max(1, scan_max))
         self._stop = threading.Event()
-        self._worker = threading.Thread(target=self._run, name="photobrowse-indexer", daemon=True)
-        self._scanner = threading.Thread(target=self._run_scans, name="photobrowse-scanner", daemon=True)
+        self._worker = threading.Thread(target=self._run, name="lighthouse-indexer", daemon=True)
+        self._scanner = threading.Thread(target=self._run_scans, name="lighthouse-scanner", daemon=True)
         self._last_persist = 0.0
         self._persist_interval_s = 5.0
         self._stats_lock = threading.Lock()

@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "photobrowse"
+name = "lighthouse"
 version = "0.1.0"
 description = "Local/offline photo indexing and semantic search (no rearranging)."
 readme = "README.md"
@@ -28,7 +28,7 @@ clip = [
 ]
 
 [project.scripts]
-photobrowse = "photobrowse.cli:app"
+lighthouse = "lighthouse.cli:app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -37,4 +37,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-photobrowse = ["templates/*.html", "static/*.css", "static/*.js"]
+lighthouse = ["templates/*.html", "static/*.css", "static/*.js"]

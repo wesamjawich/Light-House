@@ -7,21 +7,21 @@ from setuptools import find_packages, setup
 
 
 def _read_version() -> str:
-    init_py = Path(__file__).parent / "src" / "photobrowse" / "__init__.py"
+    init_py = Path(__file__).parent / "src" / "lighthouse" / "__init__.py"
     m = re.search(r"^__version__\s*=\s*\"([^\"]+)\"\s*$", init_py.read_text(), re.M)
     if not m:
-        raise RuntimeError("Could not find __version__ in src/photobrowse/__init__.py")
+        raise RuntimeError("Could not find __version__ in src/lighthouse/__init__.py")
     return m.group(1)
 
 
 setup(
-    name="photobrowse",
+    name="lighthouse",
     version=_read_version(),
     description="Local/offline photo indexing and semantic search (no rearranging).",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     include_package_data=True,
-    package_data={"photobrowse": ["templates/*.html", "static/*.css", "static/*.js"]},
+    package_data={"lighthouse": ["templates/*.html", "static/*.css", "static/*.js"]},
     install_requires=[
         "fastapi>=0.109",
         "uvicorn>=0.25",
@@ -40,5 +40,5 @@ setup(
             "open_clip_torch>=2.24.0",
         ],
     },
-    entry_points={"console_scripts": ["photobrowse=photobrowse.cli:app"]},
+    entry_points={"console_scripts": ["lighthouse=lighthouse.cli:app"]},
 )

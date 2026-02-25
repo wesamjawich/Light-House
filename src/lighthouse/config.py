@@ -14,11 +14,11 @@ class AppPaths:
     index_dir: Path
 
 
-def get_app_paths(app_name: str = "photobrowse") -> AppPaths:
+def get_app_paths(app_name: str = "lighthouse") -> AppPaths:
     base = Path(user_data_dir(app_name))
     return AppPaths(
         data_dir=base,
-        db_path=base / "photobrowse.sqlite3",
+        db_path=base / "lighthouse.sqlite3",
         thumbs_dir=base / "thumbs",
         index_dir=base / "index",
     )

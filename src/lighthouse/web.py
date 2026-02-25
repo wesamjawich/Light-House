@@ -142,11 +142,11 @@ def create_app(
         "roots_total": 0,
         "roots_online": 0,
     }
-    counts_interval_s = float(os.environ.get("PHOTOBROWSE_STATUS_COUNTS_INTERVAL_S", "30"))
-    status_busy_interval_s = float(os.environ.get("PHOTOBROWSE_STATUS_BUSY_INTERVAL_S", "0.25"))
-    status_idle_interval_s = float(os.environ.get("PHOTOBROWSE_STATUS_IDLE_INTERVAL_S", "0.25"))
+    counts_interval_s = float(os.environ.get("LIGHTHOUSE_STATUS_COUNTS_INTERVAL_S", "30"))
+    status_busy_interval_s = float(os.environ.get("LIGHTHOUSE_STATUS_BUSY_INTERVAL_S", "0.25"))
+    status_idle_interval_s = float(os.environ.get("LIGHTHOUSE_STATUS_IDLE_INTERVAL_S", "0.25"))
 
-    app = FastAPI(title="PhotoBrowse", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Light House", docs_url=None, redoc_url=None)
     static_dir = Path(__file__).parent / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -222,11 +222,11 @@ def create_app(
                 pass
 
         nonlocal monitor_thread
-        monitor_thread = threading.Thread(target=_monitor_loop, name="photobrowse-monitor", daemon=True)
+        monitor_thread = threading.Thread(target=_monitor_loop, name="lighthouse-monitor", daemon=True)
         monitor_thread.start()
 
         nonlocal catchup_thread
-        catchup_thread = threading.Thread(target=_catchup_loop, name="photobrowse-catchup", daemon=True)
+        catchup_thread = threading.Thread(target=_catchup_loop, name="lighthouse-catchup", daemon=True)
         catchup_thread.start()
 
     @app.on_event("shutdown")

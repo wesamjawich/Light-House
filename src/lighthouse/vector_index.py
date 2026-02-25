@@ -41,7 +41,7 @@ class VectorIndex:
     def _default_max_elements(self) -> int:
         # Keep this reasonably high; HNSW needs a fixed capacity, but can be resized later.
         try:
-            return max(10_000, int(os.environ.get("PHOTOBROWSE_MAX_ELEMENTS", "250000")))
+            return max(10_000, int(os.environ.get("LIGHTHOUSE_MAX_ELEMENTS", "250000")))
         except Exception:
             return 250_000
 

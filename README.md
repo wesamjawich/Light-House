@@ -1,6 +1,6 @@
-# PhotoBrowse (local/offline photo search)
+# Light House (local/offline photo search)
 
-PhotoBrowse is a local-first system to index and browse photos **without moving them**. It recursively scans tracked directories for `*.jpg`, `*.jpeg`, and `*.png`, extracts dates (EXIF when available, otherwise file mtime), generates thumbnails, and (optionally) builds a semantic search index using CLIP embeddings.
+Light House is a local-first system to index and browse photos **without moving them**. It recursively scans tracked directories for `*.jpg`, `*.jpeg`, and `*.png`, extracts dates (EXIF when available, otherwise file mtime), generates thumbnails, and (optionally) builds a semantic search index using CLIP embeddings.
 
 ## Goals
 
@@ -38,7 +38,7 @@ pip install ".[clip]"
 ### 2) Run
 
 ```bash
-photobrowse serve --port 8787
+lighthouse serve --port 8787
 ```
 
 Open `http://127.0.0.1:8787`.
@@ -48,14 +48,14 @@ Open `http://127.0.0.1:8787`.
 Use the web UI on `/roots`, or:
 
 ```bash
-photobrowse track "/Volumes/MySSD/Photos"
+lighthouse track "/Volumes/MySSD/Photos"
 ```
 
 ## Notes
 
-- PhotoBrowse never rearranges your photos. It writes its own data under your user data directory:
-  - macOS: `~/Library/Application Support/photobrowse`
-  - Linux: `~/.local/share/photobrowse`
-  - Windows: `%APPDATA%\\photobrowse`
+- Light House never rearranges your photos. It writes its own data under your user data directory:
+  - macOS: `~/Library/Application Support/lighthouse`
+  - Linux: `~/.local/share/lighthouse`
+  - Windows: `%APPDATA%\\lighthouse`
 - You can inspect the database and indexing state at `http://127.0.0.1:8787/diagnostics` while the server is running.
-- Content search requires model weights. PhotoBrowse will try to load CLIP via `open_clip`. If weights are not available locally, you may need to download them once (then the system runs offline).
+- Content search requires model weights. Light House will try to load CLIP via `open_clip`. If weights are not available locally, you may need to download them once (then the system runs offline).
