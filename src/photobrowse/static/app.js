@@ -8,30 +8,57 @@
     return Math.max(lo, Math.min(hi, v));
   }
 
-  const thumbCfg = { min: 140, max: 360, step: 10, default: 200 };
+  const thumbCfg = {
+    step: 10,
+    mobileBreakpoint: 980,
+    regular: { min: 140, max: 360, default: 200, storageKey: "pb_thumbSize" },
+    compact: { min: 90, max: 220, default: 110, storageKey: "pb_thumbSize_mobile" },
+  };
   let currentThumbSize = null;
+  let currentThumbMode = null;
+
+  function isCompactViewport() {
+    try {
+      return window.matchMedia(`(max-width: ${thumbCfg.mobileBreakpoint}px)`).matches;
+    } catch (_) {
+      return window.innerWidth <= thumbCfg.mobileBreakpoint;
+    }
+  }
+
+  function getThumbMode() {
+    return isCompactViewport() ? "compact" : "regular";
+  }
+
+  function getThumbProfile() {
+    const mode = getThumbMode();
+    if (currentThumbMode && currentThumbMode !== mode) currentThumbSize = null;
+    currentThumbMode = mode;
+    return thumbCfg[mode];
+  }
 
   function getThumbSize() {
     if (typeof currentThumbSize === "number") return currentThumbSize;
-    let v = thumbCfg.default;
+    const profile = getThumbProfile();
+    let v = profile.default;
     try {
-      const saved = Number(localStorage.getItem("pb_thumbSize"));
+      const saved = Number(localStorage.getItem(profile.storageKey));
       if (saved && !Number.isNaN(saved)) v = saved;
     } catch (_) {}
     v = Math.round(v / thumbCfg.step) * thumbCfg.step;
-    v = clamp(v, thumbCfg.min, thumbCfg.max);
+    v = clamp(v, profile.min, profile.max);
     currentThumbSize = v;
     return v;
   }
 
   function setThumbSize(px) {
-    const v = clamp(Math.round(px / thumbCfg.step) * thumbCfg.step, thumbCfg.min, thumbCfg.max);
+    const profile = getThumbProfile();
+    const v = clamp(Math.round(px / thumbCfg.step) * thumbCfg.step, profile.min, profile.max);
     currentThumbSize = v;
     root.style.setProperty("--thumbSize", `${v}px`);
     const label = qs("[data-zoom-label]");
     if (label) label.textContent = `${v}px`;
     try {
-      localStorage.setItem("pb_thumbSize", String(v));
+      localStorage.setItem(profile.storageKey, String(v));
     } catch (_) {}
     try {
       window.dispatchEvent(new CustomEvent("pb:thumbsize", { detail: { px: v } }));
@@ -42,6 +69,18 @@
 
   function initZoomControls() {
     setThumbSize(getThumbSize());
+    let prevMode = currentThumbMode || getThumbMode();
+    window.addEventListener(
+      "resize",
+      () => {
+        const nextMode = getThumbMode();
+        if (nextMode === prevMode) return;
+        prevMode = nextMode;
+        currentThumbSize = null;
+        setThumbSize(getThumbSize());
+      },
+      { passive: true },
+    );
   }
 
   function toast(msg) {

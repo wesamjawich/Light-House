@@ -596,6 +596,14 @@ code.path{
   grid-template-columns: repeat(auto-fill, minmax(var(--thumbSize), 1fr));
   gap: 10px;
 }
+@media (max-width: 980px){
+  .grid{
+    gap: 6px;
+  }
+  .tile-meta{
+    display: none;
+  }
+}
 .tile{
   position: relative;
   border-radius: var(--radius);
