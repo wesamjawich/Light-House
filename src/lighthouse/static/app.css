@@ -10,6 +10,7 @@
   --radius: 14px;
   --thumbSize: 200px;
   --viewerTopInset: 56px;
+  --viewerVh: 100vh;
 }
 
 @media (prefers-color-scheme: light){
@@ -796,12 +797,17 @@ code.path{
 .viewer{
   position: fixed;
   inset: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: var(--viewerVh, 100dvh);
   z-index: 50;
   display: none;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 .viewer.open{ display:block; }
 .viewer-backdrop{
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(0,0,0,0.82);
   opacity: 0;

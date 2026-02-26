@@ -106,16 +106,30 @@
     return isCompactViewport() ? 0 : 24;
   }
 
-  function syncViewerTopInset() {
+  function getViewerViewportHeight() {
+    const innerH = Math.max(1, Math.round(window.innerHeight || 0));
+    const vv = window.visualViewport;
+    if (vv && Number.isFinite(vv.height) && vv.height > 0) {
+      const offsetTop = Number.isFinite(vv.offsetTop) ? vv.offsetTop : 0;
+      const visualH = Math.max(1, Math.round(vv.height + offsetTop));
+      // iOS can report a visual viewport shorter than the composited page during
+      // toolbar transitions; never shrink below innerHeight or you'll expose the page.
+      return Math.max(innerH, visualH);
+    }
+    return innerH;
+  }
+
+  function syncViewerViewportMetrics() {
     const inset = getViewerTopInset();
     root.style.setProperty("--viewerTopInset", `${inset}px`);
+    root.style.setProperty("--viewerVh", `${getViewerViewportHeight()}px`);
   }
 
   function containRectForAspect(aspect, padding = null) {
     const pad = padding == null ? getViewerImagePadding() : padding;
     const topInset = getViewerTopInset();
-    const vw = window.innerWidth - pad * 2;
-    const vh = window.innerHeight - pad * 2 - topInset;
+    const vw = Math.max(1, window.innerWidth - pad * 2);
+    const vh = Math.max(1, getViewerViewportHeight() - pad * 2 - topInset);
     const a = aspect && Number.isFinite(aspect) ? clamp(aspect, 0.2, 5) : 1.5;
     let width = vw;
     let height = Math.round(width / a);
@@ -171,8 +185,37 @@
     const swipeCommitPx = 64;
     const swipeFlickPxPerMs = 0.45;
 
+    function getPanLimits(forScale = s) {
+      if (!photoEl || !stage) return { x: 0, y: 0 };
+      const scale = Number.isFinite(forScale) ? Math.max(1, forScale) : 1;
+      const baseW = photoEl.clientWidth || 0;
+      const baseH = photoEl.clientHeight || 0;
+      const stageRect = stage.getBoundingClientRect();
+      if (!(baseW > 0 && baseH > 0 && stageRect.width > 0 && stageRect.height > 0)) {
+        return { x: 0, y: 0 };
+      }
+      const scaledW = baseW * scale;
+      const scaledH = baseH * scale;
+      return {
+        x: Math.max(0, (scaledW - stageRect.width) / 2),
+        y: Math.max(0, (scaledH - stageRect.height) / 2),
+      };
+    }
+
+    function clampPan(forScale = s) {
+      const limits = getPanLimits(forScale);
+      tx = clamp(tx, -limits.x, limits.x);
+      ty = clamp(ty, -limits.y, limits.y);
+    }
+
     function applyTransform() {
       if (!photoImg) return;
+      if (s <= 1.001) {
+        tx = 0;
+        ty = 0;
+      } else {
+        clampPan(s);
+      }
       photoImg.style.setProperty("--s", String(s));
       photoImg.style.setProperty("--tx", `${tx}px`);
       photoImg.style.setProperty("--ty", `${ty}px`);
@@ -390,7 +433,7 @@
 
       viewer.classList.add("open");
       document.body.style.overflow = "hidden";
-      syncViewerTopInset();
+      syncViewerViewportMetrics();
 
       openToken += 1;
       const token = openToken;
@@ -453,6 +496,22 @@
 
       // Load full-res in the background and snap once ready.
       beginFullSwap(full, isCurrent);
+    }
+
+    function refreshViewerLayout() {
+      syncViewerViewportMetrics();
+      if (!viewer.classList.contains("open")) return;
+      if (!currentTile || !photoEl) return;
+      if (swipeDrag || pinching) return;
+      const imgAspect =
+        photoImg && photoImg.naturalWidth && photoImg.naturalHeight
+          ? photoImg.naturalWidth / Math.max(1, photoImg.naturalHeight)
+          : 0;
+      const aspect = getTileAspect(currentTile, null, null, imgAspect || 1.5);
+      const rect = containRectForAspect(aspect);
+      setPhotoRect(rect);
+      photoEl.style.borderRadius = isCompactViewport() ? "0px" : "12px";
+      applyTransform();
     }
 
     // Grid click handling.
@@ -876,14 +935,17 @@
     window.addEventListener("pointermove", moveSwipe, { passive: false });
     window.addEventListener("pointerup", endSwipe);
     window.addEventListener("pointercancel", cancelSwipe);
-    window.addEventListener(
-      "resize",
-      () => {
-        if (!viewer.classList.contains("open")) return;
-        syncViewerTopInset();
-      },
-      { passive: true },
-    );
+    let viewportSyncRaf = 0;
+    const scheduleViewerLayoutRefresh = () => {
+      if (viewportSyncRaf) return;
+      viewportSyncRaf = window.requestAnimationFrame(() => {
+        viewportSyncRaf = 0;
+        refreshViewerLayout();
+      });
+    };
+    window.addEventListener("resize", scheduleViewerLayoutRefresh, { passive: true });
+    window.visualViewport?.addEventListener("resize", scheduleViewerLayoutRefresh, { passive: true });
+    window.visualViewport?.addEventListener("scroll", scheduleViewerLayoutRefresh, { passive: true });
 
     // Double click to zoom.
     viewer?.addEventListener("dblclick", (e) => {
