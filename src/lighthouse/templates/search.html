@@ -63,8 +63,21 @@
             <div class="spinner" data-status-spinner></div>
             <div class="status-mini-text" data-status-text>…</div>
           </div>
-          <a class="btn-link" href="/roots">Roots</a>
-          <a class="btn-link" href="/diagnostics">Diagnostics</a>
+          <a class="btn-link nav-link-desktop" href="/roots">Roots</a>
+          <a class="btn-link nav-link-desktop" href="/diagnostics">Diagnostics</a>
+          <details class="nav-menu">
+            <summary class="nav-icon-btn" title="More options" aria-label="More options">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+                <circle cx="12" cy="5" r="1.9"></circle>
+                <circle cx="12" cy="12" r="1.9"></circle>
+                <circle cx="12" cy="19" r="1.9"></circle>
+              </svg>
+            </summary>
+            <div class="nav-menu-panel" role="menu" aria-label="Navigation menu">
+              <a class="nav-menu-item" href="/roots" role="menuitem">Roots</a>
+              <a class="nav-menu-item" href="/diagnostics" role="menuitem">Diagnostics</a>
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -106,6 +119,7 @@
                   data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
                   data-caption="{{ r['rel_path'] }}"
                   data-path="{{ r['path'] }}"
+                  {% if r['width'] and r['height'] %}data-aspect="{{ "%.6f"|format(r['width'] / r['height']) }}"{% endif %}
                 >
                   <img
                     src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
@@ -147,6 +161,7 @@
                     data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
                     data-caption="{{ r['rel_path'] }}"
                     data-path="{{ r['path'] }}"
+                    {% if r['width'] and r['height'] %}data-aspect="{{ "%.6f"|format(r['width'] / r['height']) }}"{% endif %}
                   >
                     <img
                       src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
@@ -190,6 +205,7 @@
                 data-full="/image/{{ r['id'] }}?v={{ r['mtime_ns'] }}"
                 data-caption="{{ r['rel_path'] }}"
                 data-path="{{ r['path'] }}"
+                {% if r['width'] and r['height'] %}data-aspect="{{ "%.6f"|format(r['width'] / r['height']) }}"{% endif %}
               >
                 <img
                   src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
@@ -230,15 +246,27 @@
       <div class="viewer-backdrop" data-viewer-backdrop></div>
       <div class="viewer-topbar">
         <div class="left">
-          <button class="viewer-btn" type="button" data-viewer-close>Close</button>
+          <button class="viewer-btn" type="button" data-viewer-close aria-label="Close viewer" title="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M6 6L18 18M18 6L6 18" />
+            </svg>
+          </button>
           <div class="viewer-caption" data-viewer-caption></div>
         </div>
         <div class="right">
-          <button class="viewer-btn" type="button" data-viewer-zoom-out>−</button>
-          <button class="viewer-btn" type="button" data-viewer-reset>Reset</button>
-          <button class="viewer-btn" type="button" data-viewer-zoom-in>+</button>
-          <a class="viewer-btn" data-viewer-folder>Folder</a>
-          <a class="viewer-btn" data-viewer-open target="_blank" rel="noopener">Open</a>
+          <a class="viewer-btn" data-viewer-folder aria-label="Open folder" title="Open folder">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M3 7H10L12 9H21V19H3Z" />
+              <path d="M3 7V19" />
+            </svg>
+          </a>
+          <a class="viewer-btn" data-viewer-open target="_blank" rel="noopener" aria-label="Open original" title="Open original">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M14 3H21V10" />
+              <path d="M10 14L21 3" />
+              <path d="M21 14V21H3V3H10" />
+            </svg>
+          </a>
         </div>
       </div>
       <div class="viewer-stage" data-viewer-stage>

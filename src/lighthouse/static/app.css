@@ -9,6 +9,7 @@
   --shadow: 0 10px 30px rgba(0,0,0,0.35);
   --radius: 14px;
   --thumbSize: 200px;
+  --viewerTopInset: 56px;
 }
 
 @media (prefers-color-scheme: light){
@@ -341,18 +342,56 @@ code.path{
 
 @media (max-width: 980px){
   .appbar-inner{
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "brand"
-      "nav"
-      "main";
-    align-items: start;
+      "brand nav"
+      "main main";
+    align-items: center;
+    gap: 10px 8px;
+    padding: 10px 12px 12px;
   }
   .appbar-nav{
-    justify-self: start;
+    justify-self: end;
+    gap: 8px;
   }
   .brand{
     min-width: 0;
+    gap: 10px;
+  }
+  .brand-title{
+    font-size: 20px;
+    line-height: 1.1;
+    font-weight: 520;
+    letter-spacing: 0;
+  }
+  .brand-sub{
+    display: none;
+  }
+  .status-mini{
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    max-width: none;
+    border-radius: 10px;
+    justify-content: center;
+    gap: 0;
+  }
+  .status-mini-text{
+    display: none !important;
+  }
+  .dot{
+    width: 9px;
+    height: 9px;
+    min-width: 9px;
+    min-height: 9px;
+    flex-basis: 9px;
+  }
+  .nav-link-desktop{
+    display: none;
+  }
+  .appbar{
+    background: color-mix(in oklab, #1d1f24 88%, transparent);
+    border-bottom-color: color-mix(in oklab, #ffffff 9%, transparent);
   }
   .controls{
     grid-template-columns: 1fr;
@@ -414,6 +453,71 @@ code.path{
 .btn-link:hover{
   background: var(--panel);
   text-decoration: none;
+}
+.nav-menu{
+  position: relative;
+}
+.nav-menu > summary{
+  list-style: none;
+}
+.nav-menu > summary::-webkit-details-marker{
+  display: none;
+}
+.nav-icon-btn{
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+}
+.nav-icon-btn:hover{
+  background: color-mix(in oklab, var(--panel) 75%, var(--accent));
+}
+.nav-icon-btn svg{
+  display: block;
+  fill: currentColor;
+}
+.nav-menu-panel{
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 176px;
+  display: none;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--bg) 70%, rgba(255,255,255,0.08));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+  z-index: 31;
+}
+.nav-menu[open] .nav-menu-panel{
+  display: grid;
+  gap: 2px;
+}
+.nav-menu-item{
+  display: block;
+  padding: 10px 12px;
+  border-radius: 9px;
+  color: var(--text);
+  text-decoration: none;
+}
+.nav-menu-item:hover{
+  text-decoration: none;
+  background: var(--panel);
+}
+@media (min-width: 981px){
+  .nav-menu{
+    display: none;
+  }
 }
 
 .controls{
@@ -518,6 +622,22 @@ code.path{
     width: 100%;
     max-width: 100%;
     margin: 0;
+    padding: 11px 12px;
+    border-radius: 18px;
+    background: color-mix(in oklab, var(--panel2) 88%, transparent);
+  }
+  .brand-title{
+    font-weight: 520;
+    letter-spacing: 0;
+  }
+  .nav-icon-btn{
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+  .nav-icon-btn svg{
+    width: 18px;
+    height: 18px;
   }
   .filters-panel{
     right: auto;
@@ -525,6 +645,22 @@ code.path{
   }
   .filters-row{
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) and (prefers-color-scheme: light){
+  .appbar{
+    background: color-mix(in oklab, #f7f8fb 94%, transparent);
+    border-bottom-color: rgba(0,0,0,0.10);
+  }
+  .searchbar{
+    background: rgba(255,255,255,0.94);
+    border-color: rgba(0,0,0,0.12);
+  }
+  .status-mini,
+  .nav-icon-btn{
+    background: rgba(0,0,0,0.03);
+    border-color: rgba(0,0,0,0.12);
   }
 }
 .control{
@@ -678,30 +814,57 @@ code.path{
   top: 0;
   left: 0;
   right: 0;
-  padding: 14px 16px;
+  padding: 10px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
+  background: transparent;
   color: rgba(255,255,255,0.9);
   z-index: 2;
 }
-.viewer-topbar .left, .viewer-topbar .right{
+.viewer-topbar .left,
+.viewer-topbar .right{
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+.viewer-topbar .left{
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .viewer-btn{
+  appearance: none;
   border: 1px solid rgba(255,255,255,0.16);
   background: rgba(255,255,255,0.06);
   color: rgba(255,255,255,0.92);
-  padding: 10px 12px;
-  border-radius: 999px;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  text-decoration: none;
+  line-height: 1;
   cursor: pointer;
 }
 .viewer-btn:hover{ background: rgba(255,255,255,0.10); }
 .viewer-btn:active{ transform: translateY(1px); }
+.viewer-btn svg{
+  width: 18px;
+  height: 18px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .viewer-caption{
+  flex: 1 1 auto;
+  min-width: 0;
   color: rgba(255,255,255,0.75);
   font-size: 12px;
   max-width: min(60vw, 720px);
@@ -712,11 +875,32 @@ code.path{
 
 .viewer-stage{
   position: absolute;
-  inset: 56px 0 0;
+  inset: var(--viewerTopInset, 56px) 0 0;
   display: grid;
   place-items: center;
   overflow: hidden;
+  touch-action: none;
   z-index: 1;
+}
+@media (max-width: 980px){
+  .viewer-topbar{
+    padding: 8px 9px;
+    gap: 6px;
+  }
+  .viewer-topbar .left, .viewer-topbar .right{ gap: 6px; }
+  .viewer-topbar .left{ min-width: 0; }
+  .viewer-caption{
+    display: none;
+  }
+  .viewer-btn{
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+  }
+  .viewer-btn svg{
+    width: 16px;
+    height: 16px;
+  }
 }
 .viewer-photo{
   position: fixed;
@@ -726,6 +910,16 @@ code.path{
   box-shadow: var(--shadow);
   background: rgba(0,0,0,0.20);
 }
+.viewer-photo.zoomed{
+  overflow: visible;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.viewer-photo.swipe-peer{
+  z-index: 0;
+  pointer-events: none;
+}
 .viewer-photo img{
   width: 100%;
   height: 100%;
@@ -734,9 +928,18 @@ code.path{
   transform-origin: center;
   will-change: transform;
   user-select: none;
+  touch-action: none;
   cursor: grab;
 }
 .viewer-photo img.dragging{ cursor: grabbing; }
+
+@media (max-width: 980px){
+  .viewer-photo{
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+}
 
 .anim-clone{ display:none; }
 

@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -535,7 +536,9 @@ def create_app(
             total_matches = int(_web_fetchone(count_query, params)["c"])
             # Deterministic daily shuffle (stable across pagination within a day,
             # rotates automatically each day for rediscovery).
-            shuffle_seed = int(datetime.now().strftime("%Y%m%d"))
+            # Hashing YYYY-MM-DD avoids day-to-day +1 seeds that can keep the
+            # first page looking unchanged with the linear ordering function.
+            shuffle_seed = zlib.crc32(datetime.now().strftime("%Y-%m-%d").encode("utf-8")) & 0x7FFFFFFF
             query += " ORDER BY (((id * 1103515245) + ?) & 2147483647), id LIMIT ? OFFSET ?"
             params2 = list(params) + [shuffle_seed, limit, offset]
             photo_rows = _web_fetchall(query, params2)

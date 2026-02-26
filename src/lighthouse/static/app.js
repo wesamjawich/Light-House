@@ -93,29 +93,40 @@
   }
   toast._t = 0;
 
-  function viewportContainRect(imgNaturalW, imgNaturalH, padding = 24) {
-    const vw = window.innerWidth - padding * 2;
-    const vh = window.innerHeight - padding * 2 - 64;
-    const scale = Math.min(vw / imgNaturalW, vh / imgNaturalH, 1);
-    const w = Math.round(imgNaturalW * scale);
-    const h = Math.round(imgNaturalH * scale);
-    const left = Math.round((window.innerWidth - w) / 2);
-    const top = Math.round((window.innerHeight - h) / 2);
-    return { left, top, width: w, height: h };
+  function getViewerTopInset() {
+    const topbar = qs(".viewer-topbar");
+    if (topbar) {
+      const h = Math.ceil(topbar.getBoundingClientRect().height || 0);
+      if (h > 0) return h;
+    }
+    return isCompactViewport() ? 92 : 64;
   }
 
-  function containRectForAspect(aspect, padding = 24) {
-    const vw = window.innerWidth - padding * 2;
-    const vh = window.innerHeight - padding * 2 - 64;
+  function getViewerImagePadding() {
+    return isCompactViewport() ? 0 : 24;
+  }
+
+  function syncViewerTopInset() {
+    const inset = getViewerTopInset();
+    root.style.setProperty("--viewerTopInset", `${inset}px`);
+  }
+
+  function containRectForAspect(aspect, padding = null) {
+    const pad = padding == null ? getViewerImagePadding() : padding;
+    const topInset = getViewerTopInset();
+    const vw = window.innerWidth - pad * 2;
+    const vh = window.innerHeight - pad * 2 - topInset;
     const a = aspect && Number.isFinite(aspect) ? clamp(aspect, 0.2, 5) : 1.5;
     let width = vw;
     let height = Math.round(width / a);
-    if (height > vh) {
+    // On compact/mobile viewports keep media full-width and center-crop vertically
+    // when needed (matching native gallery behavior).
+    if (!isCompactViewport() && height > vh) {
       height = vh;
       width = Math.round(height * a);
     }
     const left = Math.round((window.innerWidth - width) / 2);
-    const top = Math.round((window.innerHeight - height) / 2);
+    const top = Math.round(topInset + pad + (vh - height) / 2);
     return { left, top, width, height };
   }
 
@@ -130,15 +141,11 @@
     const openFolder = qs("[data-viewer-folder]", viewer);
 
     const btnClose = qs("[data-viewer-close]", viewer);
-    const btnZoomIn = qs("[data-viewer-zoom-in]", viewer);
-    const btnZoomOut = qs("[data-viewer-zoom-out]", viewer);
-    const btnReset = qs("[data-viewer-reset]", viewer);
 
     let currentTile = null;
     let tiles = [];
     let currentIndex = -1;
-    let currentSrc = "";
-    let currentCaption = "";
+    const knownAspectByFull = new Map();
 
     let photoEl = null;
     let photoImg = null;
@@ -148,14 +155,28 @@
     let ty = 0;
     let dragging = false;
     let dragStart = null;
+    const touchPoints = new Map();
+    let pinching = false;
+    let pinchBaseDistance = 0;
+    let pinchBaseScale = 1;
+    let swipeDrag = null;
+    let swipePeerEl = null;
+    let swipePeerImg = null;
+    let swipePeerDir = 0;
+    let suppressStageClickUntil = 0;
     let openToken = 0;
     let animDone = false;
+
+    const swipeAxisLockPx = 12;
+    const swipeCommitPx = 64;
+    const swipeFlickPxPerMs = 0.45;
 
     function applyTransform() {
       if (!photoImg) return;
       photoImg.style.setProperty("--s", String(s));
       photoImg.style.setProperty("--tx", `${tx}px`);
       photoImg.style.setProperty("--ty", `${ty}px`);
+      if (photoEl) photoEl.classList.toggle("zoomed", s > 1.001);
     }
 
     function resetTransform() {
@@ -178,18 +199,38 @@
 
     function setPhotoRect(rect) {
       ensurePhotoEl();
+      photoEl.style.transition = "";
+      photoEl.style.transform = "";
       photoEl.style.left = `${rect.left}px`;
       photoEl.style.top = `${rect.top}px`;
       photoEl.style.width = `${rect.width}px`;
       photoEl.style.height = `${rect.height}px`;
     }
 
+    function clearSwipePeer() {
+      if (swipePeerEl) swipePeerEl.remove();
+      swipePeerEl = null;
+      swipePeerImg = null;
+      swipePeerDir = 0;
+    }
+
+    function clearSwipeVisualState() {
+      swipeDrag = null;
+      if (photoEl) {
+        photoEl.style.transition = "";
+        photoEl.style.transform = "";
+      }
+      if (swipePeerEl) {
+        swipePeerEl.style.transition = "";
+        swipePeerEl.style.transform = "";
+      }
+      clearSwipePeer();
+    }
+
     function setCaptionAndLink(tile) {
       const title = tile.getAttribute("data-caption") || "";
       const full = tile.getAttribute("data-full") || "";
       const absPath = tile.getAttribute("data-path") || "";
-      currentCaption = title;
-      currentSrc = full;
       caption.textContent = title;
       openOriginal.setAttribute("href", full);
       const slash = Math.max(absPath.lastIndexOf("/"), absPath.lastIndexOf("\\"));
@@ -209,7 +250,92 @@
       }
     }
 
-    function closeViewer({ animate = true } = {}) {
+    function getTileAspect(tile, thumb = null, thumbRect = null, fallbackAspect = 1.5) {
+      const full = tile?.getAttribute("data-full") || "";
+      const knownAspect = Number(knownAspectByFull.get(full));
+      const tileAspectRaw = Number(tile?.getAttribute("data-aspect") || "");
+      const tileAspect = Number.isFinite(tileAspectRaw) && tileAspectRaw > 0 ? tileAspectRaw : 0;
+      const rect = thumbRect || (thumb ? thumb.getBoundingClientRect() : null);
+      const thumbAspect =
+        thumb && thumb.naturalWidth && thumb.naturalHeight
+          ? thumb.naturalWidth / thumb.naturalHeight
+          : rect && rect.width > 0 && rect.height > 0
+            ? rect.width / rect.height
+            : 0;
+      const fallback = Number.isFinite(fallbackAspect) && fallbackAspect > 0 ? fallbackAspect : 1.5;
+      return (Number.isFinite(knownAspect) && knownAspect > 0 && knownAspect) || tileAspect || thumbAspect || fallback;
+    }
+
+    function beginFullSwap(full, isCurrent) {
+      if (!full) return;
+      let fullReady = false;
+      let fullOk = false;
+      const fullLoader = new Image();
+      fullLoader.src = full;
+      (async () => {
+        try {
+          if (typeof fullLoader.decode === "function") {
+            await fullLoader.decode();
+          } else {
+            await new Promise((resolve) => {
+              fullLoader.onload = () => resolve();
+              fullLoader.onerror = () => resolve();
+            });
+          }
+          fullReady = true;
+        } catch (_) {
+          fullReady = true;
+        }
+        fullOk = !!(fullLoader.naturalWidth && fullLoader.naturalHeight);
+        if (fullOk) {
+          const fullAspect = fullLoader.naturalWidth / Math.max(1, fullLoader.naturalHeight);
+          if (Number.isFinite(fullAspect) && fullAspect > 0) knownAspectByFull.set(full, fullAspect);
+        }
+        const maybeSwap = () => {
+          if (!isCurrent()) return;
+          if (!animDone) {
+            window.setTimeout(maybeSwap, 30);
+            return;
+          }
+          if (!fullReady || !fullOk) return;
+          if (!isCurrent()) return;
+          if (!photoEl || !photoImg) return;
+          if (photoImg.dataset.wantFull !== full) return;
+
+          // Re-fit using true full-res aspect before swapping.
+          if (!swipeDrag && !pinching && s <= 1.001) {
+            const fullAspect = Number(knownAspectByFull.get(full)) || (fullLoader.naturalWidth / Math.max(1, fullLoader.naturalHeight));
+            const fullTarget = containRectForAspect(fullAspect);
+            setPhotoRect(fullTarget);
+            photoEl.style.borderRadius = isCompactViewport() ? "0px" : "12px";
+          }
+
+          const prevImg = photoImg;
+          fullLoader.dataset.wantFull = full;
+          fullLoader.style.objectFit = "contain";
+          fullLoader.style.opacity = "1";
+          fullLoader.classList.toggle("dragging", prevImg.classList.contains("dragging"));
+          fullLoader.addEventListener("dragstart", (e) => e.preventDefault());
+          if (!photoEl || prevImg.parentNode !== photoEl) return;
+          photoEl.replaceChild(fullLoader, prevImg);
+          photoImg = fullLoader;
+          applyTransform();
+        };
+        maybeSwap();
+      })();
+    }
+
+    function stepViewer(dir, { animate = false } = {}) {
+      const nextIndex = currentIndex + dir;
+      if (nextIndex < 0 || nextIndex >= tiles.length) return false;
+      const tile = tiles[nextIndex];
+      if (!tile) return false;
+      currentIndex = nextIndex;
+      setViewerToTile(tile, { animate });
+      return true;
+    }
+
+    function closeViewer() {
       if (!viewer.classList.contains("open")) return;
       document.body.style.overflow = "";
       viewer.classList.remove("open");
@@ -217,12 +343,16 @@
       currentTile = null;
       tiles = [];
       currentIndex = -1;
-      currentSrc = "";
-      currentCaption = "";
       openToken += 1;
       animDone = false;
       dragging = false;
       dragStart = null;
+      clearSwipeVisualState();
+      touchPoints.clear();
+      pinching = false;
+      pinchBaseDistance = 0;
+      pinchBaseScale = 1;
+      suppressStageClickUntil = 0;
       if (photoImg) photoImg.classList.remove("dragging");
       if (photoEl) photoEl.remove();
       photoEl = null;
@@ -238,28 +368,29 @@
 
     function setViewerToTile(tile, { animate = true } = {}) {
       const full = tile.getAttribute("data-full") || "";
-      const title = tile.getAttribute("data-caption") || "";
       const thumb = qs("img", tile);
       if (!thumb || !full) return;
 
       currentTile = tile;
-      currentSrc = full;
-      currentCaption = title;
       currentIndex = tiles.indexOf(tile);
 
       setCaptionAndLink(tile);
+      clearSwipeVisualState();
 
       ensurePhotoEl();
       resetTransform();
 
       const thumbRect = thumb.getBoundingClientRect();
-      const aspect =
-        (thumb.naturalWidth && thumb.naturalHeight && thumb.naturalWidth / thumb.naturalHeight) ||
-        (thumbRect.width && thumbRect.height && thumbRect.width / thumbRect.height) ||
-        1.5;
+      const existingRect = photoEl ? photoEl.getBoundingClientRect() : null;
+      const existingAspect =
+        existingRect && existingRect.width > 0 && existingRect.height > 0
+          ? existingRect.width / existingRect.height
+          : 0;
+      const aspect = getTileAspect(tile, thumb, thumbRect, existingAspect || 1.5);
 
       viewer.classList.add("open");
       document.body.style.overflow = "hidden";
+      syncViewerTopInset();
 
       openToken += 1;
       const token = openToken;
@@ -280,7 +411,8 @@
       photoImg.style.opacity = "1";
 
       // Animate the photo box into a viewport "contain" rect.
-      const target = containRectForAspect(aspect, 24);
+      const target = containRectForAspect(aspect);
+      const targetRadius = isCompactViewport() ? "0px" : "12px";
       if (animate) {
         setPhotoRect(thumbRect);
 
@@ -298,7 +430,7 @@
               top: `${target.top}px`,
               width: `${target.width}px`,
               height: `${target.height}px`,
-              borderRadius: "12px",
+              borderRadius: targetRadius,
             },
           ],
           { duration: 260, easing: "cubic-bezier(0.2, 0.0, 0.2, 1.0)" },
@@ -308,63 +440,19 @@
           if (!isCurrent()) return;
           // Commit final rect.
           setPhotoRect(target);
-          photoEl.style.borderRadius = "12px";
+          photoEl.style.borderRadius = targetRadius;
           photoImg.style.objectFit = "contain";
           animDone = true;
         };
       } else {
         setPhotoRect(target);
-        photoEl.style.borderRadius = "12px";
+        photoEl.style.borderRadius = targetRadius;
         photoImg.style.objectFit = "contain";
         animDone = true;
       }
 
-      // Load full-res in the background and "snap" swap once ready (no visible animation).
-      // Swap in the preloaded <img> element itself so we do not trigger a second request.
-      let fullReady = false;
-      let fullOk = false;
-      const fullLoader = new Image();
-      fullLoader.src = full;
-      (async () => {
-        try {
-          if (typeof fullLoader.decode === "function") {
-            await fullLoader.decode();
-          } else {
-            await new Promise((resolve) => {
-              fullLoader.onload = () => resolve();
-              fullLoader.onerror = () => resolve();
-            });
-          }
-          fullReady = true;
-        } catch (_) {
-          fullReady = true;
-        }
-        fullOk = !!(fullLoader.naturalWidth && fullLoader.naturalHeight);
-        // Swap only after the open animation has finished, so it doesn't look "busy".
-        const maybeSwap = () => {
-          if (!isCurrent()) return;
-          if (!animDone) {
-            window.setTimeout(maybeSwap, 30);
-            return;
-          }
-          if (!fullReady) return;
-          if (!fullOk) return;
-          // Snap to full-res.
-          if (!isCurrent()) return;
-          if (photoImg.dataset.wantFull !== full) return;
-
-          const prevImg = photoImg;
-          fullLoader.dataset.wantFull = full;
-          fullLoader.style.objectFit = "contain";
-          fullLoader.style.opacity = "1";
-          fullLoader.classList.toggle("dragging", prevImg.classList.contains("dragging"));
-          fullLoader.addEventListener("dragstart", (e) => e.preventDefault());
-          photoEl.replaceChild(fullLoader, prevImg);
-          photoImg = fullLoader;
-          applyTransform();
-        };
-        maybeSwap();
-      })();
+      // Load full-res in the background and snap once ready.
+      beginFullSwap(full, isCurrent);
     }
 
     // Grid click handling.
@@ -423,31 +511,28 @@
       if (e.key === "Escape") closeViewer();
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        const prev = currentIndex > 0 ? tiles[currentIndex - 1] : null;
-        if (prev) {
-          currentIndex -= 1;
-          setViewerToTile(prev, { animate: false });
-        }
+        stepViewer(-1, { animate: false });
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
-        const next = currentIndex >= 0 && currentIndex < tiles.length - 1 ? tiles[currentIndex + 1] : null;
-        if (next) {
-          currentIndex += 1;
-          setViewerToTile(next, { animate: false });
-        }
+        stepViewer(1, { animate: false });
       }
     });
     stage?.addEventListener("click", (e) => {
+      if (Date.now() < suppressStageClickUntil) return;
       // Clicking outside the image closes.
       if (e.target === stage) closeViewer();
     });
 
-    // Zoom controls in viewer.
+    // Zoom interactions in viewer.
     function zoomAt(delta, originX, originY) {
       const prev = s;
       const next = clamp(prev * delta, 1, 6);
       if (next === prev) return;
+      if (next <= 1.001) {
+        resetTransform();
+        return;
+      }
 
       // Adjust translation so zoom feels anchored at pointer.
       if (!photoEl) return;
@@ -460,10 +545,6 @@
       s = next;
       applyTransform();
     }
-
-    btnZoomIn?.addEventListener("click", () => zoomAt(1.2, window.innerWidth / 2, window.innerHeight / 2));
-    btnZoomOut?.addEventListener("click", () => zoomAt(1 / 1.2, window.innerWidth / 2, window.innerHeight / 2));
-    btnReset?.addEventListener("click", () => resetTransform());
 
     viewer?.addEventListener(
       "wheel",
@@ -510,6 +591,299 @@
     window.addEventListener("pointermove", movePan);
     window.addEventListener("pointerup", endPan);
     window.addEventListener("pointercancel", endPan);
+
+    const getPinchPair = () => {
+      const vals = Array.from(touchPoints.values());
+      if (vals.length < 2) return null;
+      return [vals[0], vals[1]];
+    };
+    const pointerDistance = (a, b) => Math.hypot(b.x - a.x, b.y - a.y);
+    const pointerMid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    const startPinch = () => {
+      const pair = getPinchPair();
+      if (!pair) return;
+      const [a, b] = pair;
+      const d = pointerDistance(a, b);
+      if (!Number.isFinite(d) || d <= 0) return;
+      pinching = true;
+      pinchBaseDistance = d;
+      pinchBaseScale = s;
+      clearSwipeVisualState();
+      dragging = false;
+      dragStart = null;
+      if (photoImg) photoImg.classList.remove("dragging");
+    };
+    const updatePinch = () => {
+      if (!pinching) return;
+      const pair = getPinchPair();
+      if (!pair) return;
+      const [a, b] = pair;
+      const d = pointerDistance(a, b);
+      if (!Number.isFinite(d) || d <= 0 || pinchBaseDistance <= 0) return;
+      const mid = pointerMid(a, b);
+      const next = clamp((d / pinchBaseDistance) * pinchBaseScale, 1, 6);
+      if (!photoEl) return;
+      if (!Number.isFinite(next) || next <= 0) return;
+      const delta = next / s;
+      if (!Number.isFinite(delta) || delta <= 0) return;
+      zoomAt(delta, mid.x, mid.y);
+    };
+    const stopPinch = () => {
+      pinching = false;
+      pinchBaseDistance = 0;
+      pinchBaseScale = s;
+      if (s <= 1.02) resetTransform();
+    };
+    const updateTouchPoint = (e) => {
+      if (e.pointerType !== "touch") return false;
+      if (!touchPoints.has(e.pointerId)) return false;
+      touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      return true;
+    };
+    const onViewerPointerDown = (e) => {
+      if (!viewer.classList.contains("open")) return;
+      if (e.pointerType !== "touch") return;
+      touchPoints.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touchPoints.size >= 2) {
+        e.preventDefault();
+        startPinch();
+      }
+    };
+    const onWindowPointerMove = (e) => {
+      if (!viewer.classList.contains("open")) return;
+      if (!updateTouchPoint(e)) return;
+      if (!pinching && touchPoints.size >= 2) startPinch();
+      if (!pinching) return;
+      e.preventDefault();
+      updatePinch();
+    };
+    const onWindowPointerUpOrCancel = (e) => {
+      if (e.pointerType === "touch") {
+        touchPoints.delete(e.pointerId);
+        if (touchPoints.size < 2) stopPinch();
+      }
+    };
+    viewer?.addEventListener("pointerdown", onViewerPointerDown);
+    window.addEventListener("pointermove", onWindowPointerMove, { passive: false });
+    window.addEventListener("pointerup", onWindowPointerUpOrCancel);
+    window.addEventListener("pointercancel", onWindowPointerUpOrCancel);
+
+    // Interactive swipe: current image follows finger while adjacent image slides in.
+    const getTilePreviewSrc = (tile) => {
+      if (!tile) return "";
+      const thumb = qs("img", tile);
+      if (!thumb) return tile.getAttribute("data-full") || "";
+      const pending = thumb.getAttribute("data-src");
+      const loaded = thumb.currentSrc || thumb.getAttribute("src") || "";
+      if (pending && (!loaded || loaded.startsWith("data:"))) return pending;
+      return loaded || pending || tile.getAttribute("data-full") || "";
+    };
+    const ensureSwipePeer = (tile, dir) => {
+      if (!tile || !photoEl) return false;
+      if (swipePeerEl && swipeDrag && swipeDrag.targetTile === tile && swipePeerDir === dir) return true;
+      clearSwipePeer();
+      const peer = document.createElement("div");
+      peer.className = "viewer-photo swipe-peer";
+      const peerAspect = getTileAspect(tile, null, null, 1.5);
+      const peerRect = containRectForAspect(peerAspect);
+      peer.style.left = `${peerRect.left}px`;
+      peer.style.top = `${peerRect.top}px`;
+      peer.style.width = `${peerRect.width}px`;
+      peer.style.height = `${peerRect.height}px`;
+      peer.style.borderRadius = isCompactViewport() ? "0px" : "12px";
+      const img = document.createElement("img");
+      const full = tile.getAttribute("data-full") || "";
+      const preview = getTilePreviewSrc(tile);
+      img.src = preview || full;
+      img.dataset.wantFull = full;
+      img.style.objectFit = "contain";
+      img.style.opacity = "1";
+      img.addEventListener("dragstart", (ev) => ev.preventDefault());
+      peer.appendChild(img);
+      viewer.appendChild(peer);
+      swipePeerEl = peer;
+      swipePeerImg = img;
+      swipePeerDir = dir;
+      if (full && full !== preview) {
+        const loader = new Image();
+        loader.src = full;
+        (async () => {
+          try {
+            if (typeof loader.decode === "function") await loader.decode();
+            else {
+              await new Promise((resolve) => {
+                loader.onload = () => resolve();
+                loader.onerror = () => resolve();
+              });
+            }
+          } catch (_) {
+            // keep preview
+          }
+          if (swipePeerEl !== peer || swipePeerImg !== img) return;
+          if (!(loader.naturalWidth && loader.naturalHeight)) return;
+          loader.dataset.wantFull = full;
+          loader.style.objectFit = "contain";
+          loader.style.opacity = "1";
+          loader.addEventListener("dragstart", (ev) => ev.preventDefault());
+          peer.replaceChild(loader, img);
+          swipePeerImg = loader;
+        })();
+      }
+      return true;
+    };
+    const updateSwipePositions = (dxRaw) => {
+      if (!swipeDrag || !photoEl) return;
+      const vw = Math.max(1, window.innerWidth);
+      const damp = swipeDrag.dir === 0 ? 0.22 : 1;
+      const dx = clamp(dxRaw * damp, -vw, vw);
+      swipeDrag.dx = dx;
+      photoEl.style.transition = "none";
+      photoEl.style.transform = `translate3d(${dx}px, 0, 0)`;
+      if (!swipePeerEl || swipeDrag.dir === 0) return;
+      swipePeerEl.style.transition = "none";
+      swipePeerEl.style.transform = `translate3d(${dx + swipeDrag.dir * vw}px, 0, 0)`;
+    };
+    const settleSwipe = (drag, commit) => {
+      if (!photoEl) {
+        clearSwipeVisualState();
+        return;
+      }
+      const vw = Math.max(1, window.innerWidth);
+      const dir = drag.dir || 0;
+      const duration = commit ? 220 : 180;
+      const easing = "cubic-bezier(0.2, 0.0, 0.2, 1.0)";
+      const currentTo = commit ? -dir * vw : 0;
+      const peerTo = commit ? 0 : dir * vw;
+      photoEl.style.transition = `transform ${duration}ms ${easing}`;
+      photoEl.style.transform = `translate3d(${currentTo}px, 0, 0)`;
+      if (swipePeerEl) {
+        swipePeerEl.style.transition = `transform ${duration}ms ${easing}`;
+        swipePeerEl.style.transform = `translate3d(${peerTo}px, 0, 0)`;
+      }
+      window.setTimeout(() => {
+        if (commit && dir !== 0) {
+          suppressStageClickUntil = Date.now() + 300;
+          const nextTile = drag.targetTile || tiles[currentIndex + dir] || null;
+          if (nextTile && swipePeerEl && swipePeerImg) {
+            const oldEl = photoEl;
+            photoEl = swipePeerEl;
+            photoImg = swipePeerImg;
+            swipePeerEl = null;
+            swipePeerImg = null;
+            swipePeerDir = 0;
+            photoEl.classList.remove("swipe-peer");
+            if (oldEl && oldEl !== photoEl) oldEl.remove();
+            currentTile = nextTile;
+            currentIndex = tiles.indexOf(nextTile);
+            setCaptionAndLink(nextTile);
+            const nextAspect = getTileAspect(nextTile, null, null, 1.5);
+            const nextRect = containRectForAspect(nextAspect);
+            setPhotoRect(nextRect);
+            photoEl.style.borderRadius = isCompactViewport() ? "0px" : "12px";
+            photoImg.style.objectFit = "contain";
+            resetTransform();
+            animDone = true;
+            openToken += 1;
+            const token = openToken;
+            const isCurrent = () => token === openToken && currentTile === nextTile;
+            beginFullSwap(nextTile.getAttribute("data-full") || "", isCurrent);
+            swipeDrag = null;
+            return;
+          }
+          clearSwipeVisualState();
+          stepViewer(dir, { animate: false });
+          return;
+        }
+        clearSwipeVisualState();
+      }, duration + 24);
+    };
+    const beginSwipe = (e) => {
+      if (!viewer.classList.contains("open")) return;
+      if (e.pointerType !== "touch") return;
+      if (pinching || touchPoints.size > 1) return;
+      if (s > 1) return;
+      if (!photoEl) return;
+      if (!(e.target instanceof Node)) return;
+      if (!photoEl.contains(e.target) && e.target !== stage) return;
+      clearSwipeVisualState();
+      swipeDrag = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        at: Date.now(),
+        active: false,
+        dir: 0,
+        dx: 0,
+        targetTile: null,
+      };
+    };
+    const moveSwipe = (e) => {
+      if (!swipeDrag) return;
+      if (e.pointerId !== swipeDrag.pointerId) return;
+      if (!viewer.classList.contains("open")) return;
+      if (pinching || touchPoints.size > 1 || s > 1) {
+        clearSwipeVisualState();
+        return;
+      }
+      const dx = e.clientX - swipeDrag.startX;
+      const dy = e.clientY - swipeDrag.startY;
+      if (!swipeDrag.active) {
+        if (Math.abs(dx) < swipeAxisLockPx && Math.abs(dy) < swipeAxisLockPx) return;
+        if (Math.abs(dx) <= Math.abs(dy) * 1.05) {
+          clearSwipeVisualState();
+          return;
+        }
+        swipeDrag.active = true;
+        swipeDrag.dir = dx < 0 ? 1 : -1;
+        const targetIndex = currentIndex + swipeDrag.dir;
+        if (targetIndex < 0 || targetIndex >= tiles.length) swipeDrag.dir = 0;
+        else swipeDrag.targetTile = tiles[targetIndex];
+        if (swipeDrag.dir !== 0 && swipeDrag.targetTile) ensureSwipePeer(swipeDrag.targetTile, swipeDrag.dir);
+      }
+      e.preventDefault();
+      updateSwipePositions(dx);
+    };
+    const endSwipe = (e) => {
+      if (!swipeDrag) return;
+      if (e.pointerId !== swipeDrag.pointerId) return;
+      const drag = swipeDrag;
+      swipeDrag = null;
+      if (!drag.active) {
+        clearSwipeVisualState();
+        return;
+      }
+      const dx = Number.isFinite(drag.dx) ? drag.dx : e.clientX - drag.startX;
+      const dt = Math.max(1, Date.now() - drag.at);
+      if (drag.dir === 0 || !drag.targetTile) {
+        settleSwipe(drag, false);
+        return;
+      }
+      const expectedSign = -drag.dir;
+      const inExpectedDirection = dx * expectedSign > 0;
+      const movedEnough = Math.abs(dx) > Math.max(swipeCommitPx, Math.round(window.innerWidth * 0.14));
+      const flickEnough = inExpectedDirection && Math.abs(dx / dt) > swipeFlickPxPerMs;
+      settleSwipe(drag, inExpectedDirection && (movedEnough || flickEnough));
+    };
+    const cancelSwipe = (e) => {
+      if (!swipeDrag) return;
+      if (e.pointerId !== swipeDrag.pointerId) return;
+      const drag = swipeDrag;
+      swipeDrag = null;
+      if (drag.active) settleSwipe(drag, false);
+      else clearSwipeVisualState();
+    };
+    viewer?.addEventListener("pointerdown", beginSwipe);
+    window.addEventListener("pointermove", moveSwipe, { passive: false });
+    window.addEventListener("pointerup", endSwipe);
+    window.addEventListener("pointercancel", cancelSwipe);
+    window.addEventListener(
+      "resize",
+      () => {
+        if (!viewer.classList.contains("open")) return;
+        syncViewerTopInset();
+      },
+      { passive: true },
+    );
 
     // Double click to zoom.
     viewer?.addEventListener("dblclick", (e) => {
